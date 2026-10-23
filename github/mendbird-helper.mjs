@@ -8,8 +8,9 @@
 //
 // 1. It runs as a GitHub Action: when you push to your main branch, once a day, and whenever you press Run workflow.
 // 2. It reads package names and versions from package-lock.json, yarn.lock, pnpm-lock.yaml, composer.lock,
-//    requirements.txt, poetry.lock, uv.lock, Pipfile.lock, Gemfile.lock, go.mod and Cargo.lock, up to three folders
-//    down, and the Node.js version from .nvmrc or .node-version. Nothing else is read: not your code, not your
+//    requirements.txt, poetry.lock, uv.lock, Pipfile.lock, Gemfile.lock, go.mod, Cargo.lock, gradle.lockfile,
+//    packages.lock.json, mix.lock and pubspec.lock, up to three folders down (leaving out test, example and docs
+//    folders), and the Node.js version from .nvmrc or .node-version. Nothing else is read: not your code, not your
 //    settings, not your other secrets.
 // 3. It prints the list in the Action's log, then signs it with your MENDBIRD_KEY secret and posts it to
 //    https://mendbird.com/api/helper. Mendbird refuses anything unsigned, older than five minutes, or sent twice.
@@ -23,8 +24,8 @@ import { join } from "node:path";
 
 const VERSION = "1.0.0";
 const ENDPOINT = `${process.env.MENDBIRD_URL || "https://mendbird.com"}/api/helper`;
-// Folders that hold installed or built copies rather than the site's own lock files.
-const SKIP = new Set(["node_modules", "vendor", "venv", "dist", "build", "target", "out", "coverage"]);
+// Folders that hold installed or built copies, or tests, examples and docs, rather than the live site's own lock files.
+const SKIP = new Set(["node_modules", "vendor", "venv", "dist", "build", "target", "out", "coverage", "test", "tests", "__tests__", "spec", "fixtures", "__fixtures__", "testdata", "example", "examples", "docs"]);
 
 function* lockFiles(dir, depth = 0) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -59,6 +60,17 @@ const READERS = {
   "Gemfile.lock": ["gem", text => [...text.matchAll(/^ {4}([\w.-]+) \(([^)\s-]+)[^)]*\)$/gm)].map(m => [m[1], m[2]])],
   "go.mod": ["go", text => [...text.matchAll(/^(?:require\s+|\t)([\w.~/-]+\.[\w.~/-]+)\s+(v[\w.+-]+)/gm)].map(m => [m[1], m[2]])],
   "Cargo.lock": ["cargo", text => tomlPackages(text)],
+  // Java and Kotlin: "group:artifact:version=configurations", leaving out those used only by tests.
+  "gradle.lockfile": ["maven", text => [...text.matchAll(/^([\w.-]+:[\w.-]+):([^=\s]+)=(.+)$/gm)].filter(m => m[3].split(",").some(c => !/^test/i.test(c))).map(m => [m[1], m[2]])],
+  // .NET: every package each target framework resolved to, except the solution's own projects.
+  "packages.lock.json": ["nuget", text => Object.values(JSON.parse(text).dependencies ?? {}).flatMap(deps => Object.entries(deps).filter(([, p]) => p.type !== "Project" && p.resolved).map(([n, p]) => [n, p.resolved]))],
+  // Elixir: "name": {:hex, :name, "1.2.3", ...
+  "mix.lock": ["hex", text => [...text.matchAll(/\{:hex, :([\w]+), "([^"]+)"/g)].map(m => [m[1], m[2]])],
+  // Dart and Flutter: hosted packages, leaving out those for development only.
+  "pubspec.lock": ["pub", text => text.split(/\n(?= {2}\S)/).flatMap(block => {
+    const name = block.match(/^ {2}([\w]+):/), version = block.match(/\n {4}version: "?([^"\s]+)"?/);
+    return name && version && /source: hosted/.test(block) && !/dependency: "direct dev"/.test(block) ? [[name[1], version[1]]] : [];
+  })],
 };
 READERS["npm-shrinkwrap.json"] = READERS["package-lock.json"];
 const isRequirements = name => /^requirements.*\.txt$/.test(name);

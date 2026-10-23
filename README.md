@@ -13,7 +13,7 @@ site owners and IT teams is at [mendbird.com/helper](https://mendbird.com/helper
 | --- | --- | --- |
 | [`wordpress/`](wordpress/mendbird-helper.php) | WordPress sites. A plugin, uploaded from the dashboard. | Answers a signed request at `/?mendbird-helper`. |
 | [`php/`](php/mendbird-helper.php) | Joomla, Drupal, Laravel and hand built PHP sites. One file. | Answers a signed request at `/mendbird-helper.php`. |
-| [`linux/`](linux/mendbird-helper) | Linux servers you run yourself. A POSIX shell script, run daily from cron. | Posts a signed list to `https://mendbird.com/api/helper`. |
+| [`linux/`](linux/mendbird-helper) | Linux servers you run yourself, and the Python, Node.js, PHP, Ruby, Rust and Go apps on them. A POSIX shell script, run daily from cron. | Posts a signed list to `https://mendbird.com/api/helper`. |
 | [`github/`](github/mendbird.yml) | Sites deployed from a GitHub repository: Cloudflare Workers and Pages, Vercel, Netlify, AWS Lambda. A workflow file. | Posts a signed list to `https://mendbird.com/api/helper`. |
 
 The copies here hold placeholders such as `__MENDBIRD_KEY__`. The copy you download from your Mendbird account has
@@ -31,10 +31,19 @@ written into the workflow file.
   (leaving out packages for development only). Two settings: whether PHP shows errors to visitors, and whether it
   announces its version.
 - **Linux:** the operating system and its installed packages (via `dpkg-query`, `rpm` or `apk`), and the versions of
-  the web server, PHP, Node.js and the database.
+  the web server, PHP, Node.js and the database. For each app folder you list on its `APPS` line, it reads the
+  packages the app is built from, only ever reading files, never running anything in the app:
+  - Python: the package folders in `venv`, `.venv` or `env` (`name-version.dist-info`), or else pinned
+    `requirements*.txt`;
+  - Node.js: `node_modules/*/package.json`;
+  - PHP: `vendor/composer/installed.json`, without packages for development only;
+  - Ruby and Rust: `Gemfile.lock` and `Cargo.lock`;
+  - Go: `go.mod`, and the module list every Go program carries inside it as plain text, plus its Go version.
 - **GitHub:** the packages in `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `composer.lock`, `requirements*.txt`,
-  `poetry.lock`, `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `go.mod` and `Cargo.lock`, and the Node.js version in
-  `.nvmrc` or `.node-version`.
+  `poetry.lock`, `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `go.mod`, `Cargo.lock`, `gradle.lockfile`,
+  `packages.lock.json`, `mix.lock` and `pubspec.lock`, and the Node.js version in `.nvmrc` or `.node-version`. It
+  leaves out packages for development only where the file says which they are, and folders of tests, examples and
+  docs.
 
 None of them read content, customer or user details, passwords, keys, `wp-config.php`, `.env`, logs or your code.
 
@@ -61,10 +70,10 @@ signature, the WordPress plugin does nothing (the site shows its normal page) an
 ## Tests
 
 `node test/run.mjs` runs every helper for real in Docker and checks it from the outside, the way Mendbird talks to it:
-WordPress with MariaDB, a plain PHP site, Debian 12, Ubuntu 24.04, Alpine 3.20 and Rocky Linux 9, and the GitHub
-program in a clean Node.js container. It checks the signatures, that strangers get nothing, that only the agreed
+WordPress with MariaDB, a plain PHP site, Debian 12, Ubuntu 24.04, Alpine 3.20 and Rocky Linux 9, a Debian server
+running a real Django, Node.js, PHP, Ruby, Rust and Go app, and the GitHub program in a clean Node.js container. It checks the signatures, that strangers get nothing, that only the agreed
 fields are sent, and that nothing personal ever appears. Run one part with `node test/run.mjs wordpress` (or `php`,
-`linux`, `github`). It needs Node.js 22 and Docker.
+`linux`, `apps`, `github`). It needs Node.js 22 and Docker.
 
 ## Security
 

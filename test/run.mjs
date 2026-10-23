@@ -1,6 +1,6 @@
 // Runs each helper for real, in Docker, and checks it from the outside the way Mendbird talks to it.
 //   node helpers/test/run.mjs            everything
-//   node helpers/test/run.mjs linux      one part: wordpress, php, linux or github
+//   node helpers/test/run.mjs linux      one part: wordpress, php, linux, apps or github
 // Needs Docker. Uses its own copy of the signing rules (HMAC-SHA256 over "pull:host:time", "reply:time:body" and
 // "push:time:body"), so it checks the helpers against the published design, not against Mendbird's code.
 import { execFile, execFileSync } from "node:child_process";
@@ -24,7 +24,7 @@ let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
 
 // What a helper may ever send, from docs/helper-design.md.
-const KINDS = new Set(["cms", "plugin", "theme", "php", "ext", "db", "server", "node", "composer", "npm", "pypi", "gem", "go", "cargo", "os", "deb", "rpm", "apk"]);
+const KINDS = new Set(["cms", "plugin", "theme", "php", "ext", "db", "server", "node", "composer", "npm", "pypi", "gem", "go", "cargo", "maven", "nuget", "hex", "pub", "os", "deb", "rpm", "apk"]);
 const SETTINGS = new Set(["debug_on", "dashboard_code_editor", "plugin_auto_updates", "php_version_announced", "admins"]);
 function onlyAllowed(list) {
   const top = Object.keys(list).every(k => ["helper", "software", "settings"].includes(k));
@@ -154,6 +154,39 @@ async function linux() {
   } finally { server.close(); }
 }
 
+// Apps on a Linux server: a real Django in a virtual environment, Node.js, PHP, Ruby and Rust packages, and a real Go
+// program, built here first. The helper must read every one as an ordinary user without running any of them.
+async function apps() {
+  console.log("\nApps on a Linux server");
+  chmodSync(fill("linux/mendbird-helper", `${out}linux/mendbird-helper`), 0o755);
+  cpSync(`${here}apps`, `${out}apps`, { recursive: true });
+  await shAsync("docker", ["run", "--rm", "-v", `${out}apps/go:/src`, "-w", "/src", "-e", "CGO_ENABLED=0", "golang:1.22-alpine", "sh", "-c",
+    "go mod init example.com/server >/dev/null 2>&1; go get golang.org/x/text@v0.3.7 >/dev/null 2>&1 && go build -o server . && chmod 755 server"], { timeout: 600000 });
+  const got = [], server = receiver(got);
+  try {
+    const run = await shAsync("docker", ["run", "--rm", "--add-host=host.docker.internal:host-gateway", "-e", "MENDBIRD_URL=http://host.docker.internal:8799",
+      "-v", `${out}linux/mendbird-helper:/usr/local/bin/mendbird-helper:ro`, "-v", `${out}apps:/fixture:ro`, "debian:12", "sh", "-c",
+      "apt-get update -qq && apt-get install -y -qq curl openssl python3-venv php-cli >/dev/null && cp -r /fixture /srv/apps && python3 -m venv /srv/apps/shop/venv && /srv/apps/shop/venv/bin/pip install -q Django==4.2.0 >/dev/null 2>&1 && chmod -R a+rX /srv/apps"
+      + " && su nobody -s /bin/sh -c 'MENDBIRD_APPS=\"/srv/apps/shop /srv/apps/go/server /srv/apps/missing\" /usr/local/bin/mendbird-helper --show' && su nobody -s /bin/sh -c 'MENDBIRD_APPS=\"/srv/apps/shop /srv/apps/go/server\" /usr/local/bin/mendbird-helper' && echo sent"], { timeout: 900000 });
+    const shown = JSON.parse(run.slice(0, run.lastIndexOf("sent")).trim());
+    const has = (kind, name, version) => shown.software.some(s => s.kind === kind && s.name === name && s.version === version);
+    check(onlyAllowed(shown), "the list holds only the agreed fields");
+    // pip records Django 4.2.0 as 4.2.
+    check(has("pypi", "django", "4.2") && shown.software.some(s => s.kind === "pypi" && s.name === "asgiref"), "Python: Django and what it brought with it, from the virtual environment");
+    check(has("npm", "express", "4.17.1") && has("npm", "@hono/node-server", "1.11.0"), "Node.js: packages from node_modules, scoped ones too");
+    check(has("composer", "laravel/framework", "10.0.0") && !shown.software.some(s => s.name === "phpunit/phpunit"), "PHP: Composer's installed packages, without those for development");
+    check(has("gem", "actionpack", "6.0.0") && has("cargo", "tokio", "1.0.0"), "Ruby and Rust lock files");
+    check(has("go", "golang.org/x/text", "v0.3.7") && shown.software.some(s => s.kind === "go" && s.name === "stdlib" && /^1\.22\./.test(s.version)), "Go: the modules and Go version inside the program, without running it");
+    check(!/never-sent/.test(JSON.stringify(shown)), "nothing from .env");
+    check(got.length === 1 && got[0].ok && JSON.stringify(JSON.parse(got[0].body)).length > 0, "sends a signed list");
+    // Alpine's smaller tools read binary files differently, so the Go program and node_modules are checked there too.
+    const tiny = await shAsync("docker", ["run", "--rm", "-v", `${out}linux/mendbird-helper:/usr/local/bin/mendbird-helper:ro`, "-v", `${out}apps:/srv/apps:ro`, "alpine:3.20", "sh", "-c",
+      "su nobody -s /bin/sh -c 'MENDBIRD_APPS=\"/srv/apps/shop /srv/apps/go/server\" /usr/local/bin/mendbird-helper --show'"], { timeout: 300000 });
+    const alpine = JSON.parse(tiny).software, on = (kind, name) => alpine.some(s => s.kind === kind && s.name === name);
+    check(on("go", "golang.org/x/text") && on("go", "stdlib") && on("npm", "@hono/node-server") && on("gem", "actionpack"), "Alpine: the same apps read the same way");
+  } finally { server.close(); }
+}
+
 // GitHub: the workflow's program, run the way the workflow runs it, in a clean Node.js container over a small repository.
 async function github() {
   console.log("\nGitHub workflow");
@@ -179,6 +212,7 @@ try {
   if (!only || only === "wordpress") await wordpress();
   if (!only || only === "php") await php();
   if (!only || only === "linux") await linux();
+  if (!only || only === "apps") await apps();
   if (!only || only === "github") await github();
 } finally {
   if (!process.env.KEEP && (!only || ["wordpress", "php"].includes(only))) compose("down", "-v");

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Mendbird helper for Linux servers. Version 1.0.0.
+# Mendbird helper for Linux servers. Version 1.1.0.
 #
 # Lists the software this server runs: the operating system and its installed packages, the web server, PHP, Node.js
 # and the database, with their exact versions. Once a day it sends that list to Mendbird, which checks every version
@@ -8,7 +8,8 @@
 # How it works, in full, because you should be able to check:
 #
 # 1. It reads package names and versions with the system's own tools (dpkg-query, rpm or apk), and asks the web
-#    server, PHP, Node.js and the database for their version numbers. Nothing else is read.
+#    server, PHP, Node.js and the database for their version numbers. If you list your apps below, it also reads the
+#    names and versions of the packages each one is built from. Nothing else is read, and nothing in your apps is run.
 # 2. It signs the list with the secret key below and posts it to https://mendbird.com/api/helper. Mendbird refuses
 #    anything unsigned, older than five minutes, or sent twice.
 # 3. It opens no port, takes no instructions, and needs no root: any user can run it.
@@ -30,7 +31,13 @@ umask 077
 # Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
 KEY='__MENDBIRD_KEY__'
 SITE='__MENDBIRD_SITE__'
-VERSION='1.0.0'
+VERSION='1.1.0'
+
+# Your own apps, if this server runs any: Python, Node.js, PHP, Ruby, Rust or Go. Put each app's folder here, separated
+# by spaces, or the path of a Go program. For example: APPS='/srv/shop /srv/api/bin/server'
+# Setting MENDBIRD_APPS on the crontab line does the same.
+APPS=''
+APPS="${MENDBIRD_APPS:-$APPS}"
 URL="${MENDBIRD_URL:-https://mendbird.com}/api/helper"
 
 # Only plain package characters ever go into the list, so nothing can break out of the JSON.
@@ -80,7 +87,65 @@ list() {
 		case "$v" in *MariaDB*) one db mariadb "$(printf '%s' "$v" | sed 's/.*Distrib //' | first_version)" ;; *) one db mysql "$(printf '%s' "$v" | sed 's/.*Ver //' | first_version)" ;; esac
 	fi
 	has psql && one db postgresql "$(psql --version 2>/dev/null | first_version)"
+	for app in $APPS; do app "$app"; done
 	printf '],"settings":{}}\n'
+}
+
+# The apps: only files are read, so nothing in them runs. Each part prints "name version" lines for entries().
+python_names() { awk '{ n = tolower($1); gsub(/[-_.]+/, "-", n); print n, $2 }'; }
+app_python() {
+	found=''
+	for site in "$1"/venv/lib/python*/site-packages "$1"/.venv/lib/python*/site-packages "$1"/env/lib/python*/site-packages; do
+		[ -d "$site" ] || continue
+		found=yes
+		# Each installed package has a folder called name-version.dist-info.
+		ls "$site" | sed -n 's/^\([^-]*\)-\([^-]*\)\.dist-info$/\1 \2/p' | python_names | entries pypi
+	done
+	if [ -z "$found" ]; then
+		for req in "$1"/requirements*.txt; do
+			[ -r "$req" ] && sed -n 's/^\([A-Za-z0-9][A-Za-z0-9._-]*\)\(\[[^]]*\]\)\{0,1\}[[:space:]]*==[[:space:]]*\([A-Za-z0-9.!+-]*\).*/\1 \3/p' "$req" | python_names | entries pypi
+		done
+	fi
+	return 0
+}
+app_node() {
+	for pkg in "$1"/node_modules/*/package.json "$1"/node_modules/@*/*/package.json; do
+		[ -f "$pkg" ] || continue
+		dir=${pkg%/package.json}
+		# The first "version" in the file, which is the package's own, whether the file is spread out or on one line.
+		printf '%s %s\n' "${dir#"$1"/node_modules/}" "$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$pkg" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
+	done | entries npm
+}
+app_php() {
+	installed="$1/vendor/composer/installed.json"
+	if [ -r "$installed" ] && has php; then
+		# Composer's own record of what it installed, leaving out packages for development only.
+		php -r '$d = json_decode(file_get_contents($argv[1]), true); $dev = isset($d["dev-package-names"]) ? $d["dev-package-names"] : array();
+			foreach (isset($d["packages"]) ? $d["packages"] : (array) $d as $p) { if (isset($p["name"], $p["version"]) && !in_array($p["name"], $dev, true)) { echo $p["name"], " ", ltrim($p["version"], "v"), "\n"; } }' "$installed" | entries composer
+	fi
+	return 0
+}
+app_go_program() {
+	# A Go program carries the list of modules it was built from, and its Go version, as plain text between zero bytes.
+	# Only that text is read; the program is never run.
+	text=$(tr '\000' '\n' < "$1" | awk -F '\t' '$1 == "mod" || $1 == "dep" { print $1, $2, $3 } /^go1\.[0-9]+\.[0-9]+$/ { print "go", $0 }' | sort -u)
+	printf '%s\n' "$text" | grep -q '^mod ' || return 0
+	one go stdlib "$(printf '%s\n' "$text" | sed -n 's/^go go//p' | head -n 1)"
+	printf '%s\n' "$text" | awk '$1 == "dep" { print $2, $3 }' | entries go
+}
+app() {
+	if [ -f "$1" ]; then app_go_program "$1"; return 0; fi
+	[ -d "$1" ] || { echo "mendbird-helper: $1 is not a folder or a file, so it was left out" >&2; return 0; }
+	app_python "$1"
+	app_node "$1"
+	app_php "$1"
+	[ -r "$1/Gemfile.lock" ] && sed -n 's/^    \([A-Za-z0-9._-]*\) (\([^)[:space:]-]*\).*/\1 \2/p' "$1/Gemfile.lock" | entries gem
+	[ -r "$1/Cargo.lock" ] && awk '/^\[\[package\]\]/ { n = "" } /^name = / { gsub(/"/, "", $3); n = $3 } /^version = / { gsub(/"/, "", $3); if (n != "") print n, $3; n = "" }' "$1/Cargo.lock" | entries cargo
+	[ -r "$1/go.mod" ] && awk '$1 == "require" && $3 ~ /^v/ { print $2, $3 } /^\t/ && $2 ~ /^v/ && $1 ~ /\./ { print $1, $2 }' "$1/go.mod" | entries go
+	for program in "$1"/* "$1"/bin/*; do
+		[ -f "$program" ] && [ -x "$program" ] && app_go_program "$program"
+	done
+	return 0
 }
 
 case "${1:-}" in
