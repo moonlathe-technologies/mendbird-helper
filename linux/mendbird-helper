@@ -18,9 +18,13 @@
 #
 #     mendbird-helper --show
 #
-# To run it daily, put it somewhere such as /usr/local/bin and add one line to the crontab of any user, for example:
+# It holds your key, so keep it where only the user who runs it can read it. As that user:
 #
-#     17 4 * * * /usr/local/bin/mendbird-helper
+#     install -m 700 mendbird-helper "$HOME/mendbird-helper"
+#
+# then add one line to that user's crontab to run it daily:
+#
+#     17 4 * * * $HOME/mendbird-helper
 #
 # Delete it and remove that line, and it stops. Licence: MIT.
 # The code is public at https://github.com/moonlathe-technologies/mendbird-helper
@@ -159,11 +163,29 @@ for tool in curl openssl; do
 	has "$tool" || { echo "mendbird-helper needs $tool" >&2; exit 1; }
 done
 
-body=$(mktemp)
-trap 'rm -f "$body"' EXIT
+# The key is in this file, so other users on the server should not be able to read it.
+case $(ls -ld "$0" | cut -c5-10) in
+	*r*) echo "mendbird-helper: other users on this server can read this file and the key in it. Run: chmod 700 $0" >&2 ;;
+esac
+
+# HMAC-SHA256, worked out here rather than with openssl's -hmac option, so the key is never on a command line where
+# other users could see it in the list of running programs. $1 is 54 for the inner pad and 92 for the outer one.
+pad() {
+	k=$KEY i=0
+	while [ "$i" -lt 64 ]; do
+		c=0
+		if [ -n "$k" ]; then c=$(printf '%d' "'${k%"${k#?}"}"); k=${k#?}; fi
+		printf '%b' "\\0$(printf '%o' $((c ^ $1)))"
+		i=$((i + 1))
+	done
+}
+
+body=$(mktemp) inner=$(mktemp)
+trap 'rm -f "$body" "$inner"' EXIT
 list > "$body"
 time=$(date +%s)
-sign=$( { printf 'push:%s:' "$time"; cat "$body"; } | openssl dgst -sha256 -hmac "$KEY" | sed 's/^.*= *//')
+{ pad 54; printf 'push:%s:' "$time"; cat "$body"; } | openssl dgst -sha256 -binary > "$inner"
+sign=$( { pad 92; cat "$inner"; } | openssl dgst -sha256 | sed 's/^.*= *//')
 curl -fsS --max-time 30 -X POST "$URL" \
 	-H 'content-type: application/json' \
 	-H "mendbird-site: $SITE" \
