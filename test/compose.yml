@@ -1,0 +1,25 @@
+# Test sites for the helpers: a real WordPress with its database, and a plain PHP site. Test values only.
+services:
+  db:
+    image: mariadb:11
+    environment: { MARIADB_ROOT_PASSWORD: test-only, MARIADB_DATABASE: wp, MARIADB_USER: wp, MARIADB_PASSWORD: test-only }
+  wordpress:
+    image: wordpress:php8.3-apache
+    depends_on: [db]
+    ports: ["8081:80"]
+    # Debug mode is on from the start, so the settings check sees it (changing wp-config.php later races PHP's file cache).
+    environment: { WORDPRESS_DB_HOST: db, WORDPRESS_DB_USER: wp, WORDPRESS_DB_PASSWORD: test-only, WORDPRESS_DB_NAME: wp, WORDPRESS_DEBUG: 1 }
+    volumes: ["wp:/var/www/html", "./out/wordpress:/var/www/html/wp-content/plugins/mendbird-helper:ro"]
+  cli:
+    image: wordpress:cli-php8.3
+    depends_on: [wordpress]
+    user: "33:33"
+    environment: { WORDPRESS_DB_HOST: db, WORDPRESS_DB_USER: wp, WORDPRESS_DB_PASSWORD: test-only, WORDPRESS_DB_NAME: wp }
+    volumes: ["wp:/var/www/html", "./out/wordpress:/var/www/html/wp-content/plugins/mendbird-helper:ro"]
+    entrypoint: ["sleep", "infinity"]
+  php:
+    image: php:8.3-apache
+    ports: ["8082:80"]
+    volumes: ["./out/php-site:/var/www:ro"]
+volumes:
+  wp:

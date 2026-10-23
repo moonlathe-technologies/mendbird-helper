@@ -1,0 +1,107 @@
+#!/bin/sh
+# Mendbird helper for Linux servers. Version 1.0.0.
+#
+# Lists the software this server runs: the operating system and its installed packages, the web server, PHP, Node.js
+# and the database, with their exact versions. Once a day it sends that list to Mendbird, which checks every version
+# against the lists of known security flaws, including the fixes your system has made to its own packages.
+#
+# How it works, in full, because you should be able to check:
+#
+# 1. It reads package names and versions with the system's own tools (dpkg-query, rpm or apk), and asks the web
+#    server, PHP, Node.js and the database for their version numbers. Nothing else is read.
+# 2. It signs the list with the secret key below and posts it to https://mendbird.com/api/helper. Mendbird refuses
+#    anything unsigned, older than five minutes, or sent twice.
+# 3. It opens no port, takes no instructions, and needs no root: any user can run it.
+#
+# To see exactly what it sends, without sending anything:
+#
+#     mendbird-helper --show
+#
+# To run it daily, put it somewhere such as /usr/local/bin and add one line to the crontab of any user, for example:
+#
+#     17 4 * * * /usr/local/bin/mendbird-helper
+#
+# Delete it and remove that line, and it stops. Licence: MIT.
+# The code is public at https://github.com/moonlathe-technologies/mendbird-helper
+
+set -eu
+umask 077
+
+# Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
+KEY='__MENDBIRD_KEY__'
+SITE='__MENDBIRD_SITE__'
+VERSION='1.0.0'
+URL="${MENDBIRD_URL:-https://mendbird.com}/api/helper"
+
+# Only plain package characters ever go into the list, so nothing can break out of the JSON.
+clean() { tr -cd 'A-Za-z0-9.+:~_@/ -'; }
+clean_lines() { tr -cd 'A-Za-z0-9.+:~_@/ \n-'; }
+
+# One JSON entry per line of "name version" read from standard input.
+entries() {
+	kind=$1
+	clean_lines | while read -r name version; do
+		[ -n "$name" ] || continue
+		printf ',{"kind":"%s","name":"%s","version":"%s"}' "$kind" "$name" "$version"
+	done
+}
+
+one() { [ -n "$3" ] && printf ',{"kind":"%s","name":"%s","version":"%s"}' "$1" "$2" "$(printf '%s' "$3" | clean)"; return 0; }
+first_version() { grep -o '[0-9][0-9]*\.[0-9][0-9.]*' | head -n 1; }
+has() { command -v "$1" >/dev/null 2>&1; }
+
+list() {
+	os_id=''; os_version=''
+	if [ -r /etc/os-release ]; then
+		os_id=$(. /etc/os-release && printf '%s' "${ID:-}" | clean)
+		os_version=$(. /etc/os-release && printf '%s' "${VERSION_ID:-}" | clean)
+	fi
+	printf '{"helper":{"kind":"linux","version":"%s"},"software":[' "$VERSION"
+	printf '{"kind":"os","name":"%s","version":"%s"}' "${os_id:-linux}" "$os_version"
+
+	# The system's packages. On Debian and Ubuntu the source package is what security notices name.
+	if has dpkg-query; then
+		dpkg-query -W -f='${db:Status-Status} ${source:Package} ${source:Version}\n' 2>/dev/null | awk '$1 == "installed" { print $2, $3 }' | sort -u | entries deb
+	elif has rpm; then
+		rpm -qa --qf '%{NAME} %{EPOCH}:%{VERSION}-%{RELEASE}\n' 2>/dev/null | sed 's/ (none):/ /' | sort -u | entries rpm
+	elif has apk; then
+		# "openssl-3.3.2-r0 x86_64 {openssl} ..." gives the origin package and its version.
+		apk list --installed 2>/dev/null | awk '{ n = split($1, p, "-"); v = p[n-1] "-" p[n]; o = $3; gsub(/[{}]/, "", o); print o, v }' | sort -u | entries apk
+	fi
+
+	has nginx && one server nginx "$(nginx -v 2>&1 | first_version)"
+	if has apache2; then one server apache "$(apache2 -v 2>/dev/null | first_version)"; elif has httpd; then one server apache "$(httpd -v 2>/dev/null | first_version)"; fi
+	has php && one php php "$(php -r 'echo PHP_VERSION;' 2>/dev/null)"
+	has node && one node node "$(node -v 2>/dev/null | first_version)"
+	if has mariadb; then
+		one db mariadb "$(mariadb --version 2>/dev/null | sed 's/.*Distrib //' | first_version)"
+	elif has mysql; then
+		v=$(mysql --version 2>/dev/null)
+		case "$v" in *MariaDB*) one db mariadb "$(printf '%s' "$v" | sed 's/.*Distrib //' | first_version)" ;; *) one db mysql "$(printf '%s' "$v" | sed 's/.*Ver //' | first_version)" ;; esac
+	fi
+	has psql && one db postgresql "$(psql --version 2>/dev/null | first_version)"
+	printf '],"settings":{}}\n'
+}
+
+case "${1:-}" in
+	--show) list; exit 0 ;;
+	--version) echo "mendbird-helper $VERSION"; exit 0 ;;
+	"") ;;
+	*) echo "Usage: mendbird-helper [--show]" >&2; exit 2 ;;
+esac
+
+for tool in curl openssl; do
+	has "$tool" || { echo "mendbird-helper needs $tool" >&2; exit 1; }
+done
+
+body=$(mktemp)
+trap 'rm -f "$body"' EXIT
+list > "$body"
+time=$(date +%s)
+sign=$( { printf 'push:%s:' "$time"; cat "$body"; } | openssl dgst -sha256 -hmac "$KEY" | sed 's/^.*= *//')
+curl -fsS --max-time 30 -X POST "$URL" \
+	-H 'content-type: application/json' \
+	-H "mendbird-site: $SITE" \
+	-H "mendbird-time: $time" \
+	-H "mendbird-sign: $sign" \
+	--data-binary "@$body" >/dev/null
