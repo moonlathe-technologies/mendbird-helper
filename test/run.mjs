@@ -116,8 +116,9 @@ async function connect(wp, url) {
     check(start.origin === "http://host.docker.internal:8090" && start.pathname === "/connect" && start.searchParams.get("site") === HOST && /\/wp-admin\/tools\.php\?page=mendbird-helper$/.test(start.searchParams.get("back")) && /^\w{32}$/.test(state), "Connect sends the admin to Mendbird with the site, the way back and a state");
     check(/not started from this site/.test(await php(`var_export(mendbird_helper_finish("code-for-this-site-0001", "a-state-it-never-made-000"));`)), "a code with someone else's state is refused, and Mendbird is not even asked");
     check(asked.length === 0, "nothing was sent for it");
-    const again = new URL(await php("echo mendbird_helper_connect_url();")).searchParams.get("state");
-    check(await php(`var_export(mendbird_helper_finish("code-for-this-site-0001", "${again}"));`) === "true", "the right state: the code is swapped for the key");
+    // The same visit's state still works: a wrong link must not cancel a connection under way.
+    const again = state;
+    check(await php(`var_export(mendbird_helper_finish("code-for-this-site-0001", "${again}"));`) === "true", "the right state, after a wrong one: the code is swapped for the key");
     check(asked.length === 1 && asked[0].path === "/api/connect" && asked[0].body === '{"code":"code-for-this-site-0001"}', "the swap sends only the code");
     check(await php("echo wp_json_encode(get_option('mendbird_helper_connection'));") === JSON.stringify({ key: KEY2, host: HOST, site: 7 }), "the key is kept in the site's options");
     check(!(await php("echo implode(',', array_keys(wp_load_alloptions()));")).split(",").includes("mendbird_helper_connection"), "and not loaded on every page");

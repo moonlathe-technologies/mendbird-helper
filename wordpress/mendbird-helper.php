@@ -92,12 +92,13 @@ function mendbird_helper_list() {
 		$software[] = array( 'kind' => 'db', 'name' => false !== stripos( $db, 'mariadb' ) ? 'mariadb' : 'mysql', 'version' => $m[1] );
 	}
 	// For example "Apache/2.4.58 (Ubuntu)" or "nginx/1.24.0".
-	$server = isset( $_SERVER['SERVER_SOFTWARE'] ) ? (string) $_SERVER['SERVER_SOFTWARE'] : '';
+	$server = isset( $_SERVER['SERVER_SOFTWARE'] ) ? sanitize_text_field( wp_unslash( $_SERVER['SERVER_SOFTWARE'] ) ) : '';
 	if ( preg_match( '/^(apache|nginx|litespeed|openresty)(?:\/([\d.]+))?/i', $server, $m ) ) {
 		$software[] = array( 'kind' => 'server', 'name' => strtolower( $m[1] ), 'version' => isset( $m[2] ) ? $m[2] : '' );
 	}
 
-	$forced = apply_filters( 'auto_update_plugin', null, (object) array( 'plugin' => '' ) );
+	// Only read: whether a setting or another plugin makes every plugin update itself.
+	$forced = function_exists( 'wp_is_auto_update_forced_for_item' ) && wp_is_auto_update_forced_for_item( 'plugin', null, (object) array( 'plugin' => '' ) );
 	$users = count_users();
 	return array(
 		'helper'   => array( 'kind' => 'wordpress', 'version' => MENDBIRD_HELPER_VERSION ),
@@ -105,7 +106,7 @@ function mendbird_helper_list() {
 		'settings' => array(
 			'debug_on'              => defined( 'WP_DEBUG' ) && WP_DEBUG && ( ! defined( 'WP_DEBUG_DISPLAY' ) || WP_DEBUG_DISPLAY ),
 			'dashboard_code_editor' => ! ( defined( 'DISALLOW_FILE_EDIT' ) && DISALLOW_FILE_EDIT ) && ! ( defined( 'DISALLOW_FILE_MODS' ) && DISALLOW_FILE_MODS ),
-			'plugin_auto_updates'   => ! ( defined( 'AUTOMATIC_UPDATER_DISABLED' ) && AUTOMATIC_UPDATER_DISABLED ) && ( true === $forced || $all_auto ),
+			'plugin_auto_updates'   => ! ( defined( 'AUTOMATIC_UPDATER_DISABLED' ) && AUTOMATIC_UPDATER_DISABLED ) && ( $forced || $all_auto ),
 			'php_version_announced' => (bool) ini_get( 'expose_php' ),
 			'admins'                => isset( $users['avail_roles']['administrator'] ) ? (int) $users['avail_roles']['administrator'] : 0,
 		),
@@ -114,11 +115,12 @@ function mendbird_helper_list() {
 
 /** Answers Mendbird's signed request, and nobody else's. */
 function mendbird_helper_answer() {
-	if ( ! isset( $_GET['mendbird-helper'] ) ) {
+	// No nonce: Mendbird's request is not a form, and its signature below does that job.
+	if ( ! isset( $_GET['mendbird-helper'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		return;
 	}
-	$time = isset( $_SERVER['HTTP_MENDBIRD_TIME'] ) ? (string) $_SERVER['HTTP_MENDBIRD_TIME'] : '';
-	$sign = isset( $_SERVER['HTTP_MENDBIRD_SIGN'] ) ? strtolower( (string) $_SERVER['HTTP_MENDBIRD_SIGN'] ) : '';
+	$time = isset( $_SERVER['HTTP_MENDBIRD_TIME'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_MENDBIRD_TIME'] ) ) : '';
+	$sign = isset( $_SERVER['HTTP_MENDBIRD_SIGN'] ) ? strtolower( sanitize_text_field( wp_unslash( $_SERVER['HTTP_MENDBIRD_SIGN'] ) ) ) : '';
 	$creds = mendbird_helper_key();
 	if ( ! $creds || ! ctype_digit( $time ) || abs( time() - (int) $time ) > 300 || 64 !== strlen( $sign ) ) {
 		return;
@@ -164,10 +166,11 @@ function mendbird_helper_connect_url() {
  */
 function mendbird_helper_finish( $code, $state ) {
 	$expected = get_transient( 'mendbird_helper_state' );
-	delete_transient( 'mendbird_helper_state' );
 	if ( ! is_string( $expected ) || ! hash_equals( $expected, (string) $state ) || ! preg_match( '/^[\w-]{20,100}$/', (string) $code ) ) {
 		return 'That link has run out or was not started from this site. Press Connect to Mendbird again.';
 	}
+	// Used up only by the right way back, so a wrong link cannot cancel a connection that is under way.
+	delete_transient( 'mendbird_helper_state' );
 	$res = wp_remote_post(
 		MENDBIRD_HELPER_URL . '/api/connect',
 		array(
@@ -262,7 +265,7 @@ function mendbird_helper_connection_box() {
 	};
 	echo '<div class="card" style="max-width:none">';
 	if ( $creds && $creds['written'] ) {
-		echo '<h2>Connected</h2><p>' . esc_html( sprintf( 'This copy was downloaded from your Mendbird account for %s, with its key written in.', $creds['host'] ) ) . '</p>';
+		echo '<h2>Connected</h2><p>' . esc_html( sprintf( 'This copy was downloaded from your Mendbird account for %s, with its key written in. To stop it, deactivate or delete the plugin.', $creds['host'] ) ) . '</p>';
 	} elseif ( $creds ) {
 		echo '<h2>Connected</h2><p>' . esc_html( sprintf( 'Mendbird reads this list every morning for %s.', $creds['host'] ) ) . '</p>';
 		$form( 'disconnect', '', 'Disconnect', 'secondary' );
@@ -310,7 +313,7 @@ function mendbird_helper_page() {
 
 	echo '<div class="wrap"><h1>Mendbird helper</h1>';
 	mendbird_helper_connection_box();
-	echo '<p>Once a day Mendbird asks this site for the list below, and checks every version against the lists of known security flaws. Nothing else is sent, and the helper never changes anything. To stop it, deactivate or delete the plugin.</p>';
+	echo '<p>Once connected, Mendbird asks this site for the list below once a day, and checks every version against the lists of known security flaws. Nothing else is sent, and the helper never changes anything.</p>';
 	echo '<h2>Software</h2><table class="widefat striped"><thead><tr><th>Kind</th><th>Name</th><th>Version</th><th>In use</th></tr></thead><tbody>' . $rows . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
 	echo '<h2>Settings</h2><table class="widefat striped"><tbody>' . $settings . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
 	echo '<h2>' . esc_html( sprintf( 'PHP add-ons (%d)', $ext_count ) ) . '</h2><table class="widefat striped"><thead><tr><th>Name</th><th>Version</th></tr></thead><tbody>' . $exts . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
