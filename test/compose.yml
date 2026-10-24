@@ -8,13 +8,16 @@ services:
     depends_on: [db]
     ports: ["8081:80"]
     # Debug mode is on from the start, so the settings check sees it (changing wp-config.php later races PHP's file cache).
-    environment: { WORDPRESS_DB_HOST: db, WORDPRESS_DB_USER: wp, WORDPRESS_DB_PASSWORD: test-only, WORDPRESS_DB_NAME: wp, WORDPRESS_DEBUG: 1 }
+    # The Connect test swaps its code with a stand-in Mendbird that run.mjs serves on port 8090.
+    environment: { WORDPRESS_DB_HOST: db, WORDPRESS_DB_USER: wp, WORDPRESS_DB_PASSWORD: test-only, WORDPRESS_DB_NAME: wp, WORDPRESS_DEBUG: 1, WORDPRESS_CONFIG_EXTRA: "define('MENDBIRD_HELPER_URL', 'http://host.docker.internal:8090');" }
+    extra_hosts: ["host.docker.internal:host-gateway"]
     volumes: ["wp:/var/www/html", "./out/wordpress:/var/www/html/wp-content/plugins/mendbird-helper:ro"]
   cli:
     image: wordpress:cli-php8.3
     depends_on: [wordpress]
     user: "33:33"
-    environment: { WORDPRESS_DB_HOST: db, WORDPRESS_DB_USER: wp, WORDPRESS_DB_PASSWORD: test-only, WORDPRESS_DB_NAME: wp }
+    environment: { WORDPRESS_DB_HOST: db, WORDPRESS_DB_USER: wp, WORDPRESS_DB_PASSWORD: test-only, WORDPRESS_DB_NAME: wp, WORDPRESS_CONFIG_EXTRA: "define('MENDBIRD_HELPER_URL', 'http://host.docker.internal:8090');" }
+    extra_hosts: ["host.docker.internal:host-gateway"]
     volumes: ["wp:/var/www/html", "./out/wordpress:/var/www/html/wp-content/plugins/mendbird-helper:ro"]
     entrypoint: ["sleep", "infinity"]
   php:

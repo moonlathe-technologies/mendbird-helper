@@ -22,17 +22,45 @@
  *    admins can edit code from the dashboard, whether plugins update themselves, whether PHP announces its version,
  *    and how many admin accounts there are (a number, never names).
  *
- * It never reads posts, pages, comments, orders, form entries or user details, never reads wp-config.php, never
- * contacts anyone, and never changes anything. Delete it and it stops. The code is public at
- * https://github.com/moonlathe-technologies/mendbird-helper
+ * 4. Connecting. A copy downloaded from your Mendbird account has its key written in below. A copy from wordpress.org
+ *    has none, so under Tools, Mendbird helper you press Connect to Mendbird: it takes you to mendbird.com to sign in
+ *    or start a free trial and confirm the site, then brings you back with a one time code. This plugin swaps that
+ *    code for the key with one request to https://mendbird.com/api/connect, sending only the code, and keeps the key
+ *    in this site's options. You can paste a key from your account instead.
+ *
+ * It never reads posts, pages, comments, orders, form entries or user details, never reads wp-config.php, contacts
+ * nobody but Mendbird and only when you connect it, and never changes anything else. Delete it and it stops. The code
+ * is public at https://github.com/moonlathe-technologies/mendbird-helper
  */
 
 defined( 'ABSPATH' ) || exit;
 
-// Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
+// Written in by Mendbird when you downloaded this copy from your account; left as they are in the copy from
+// wordpress.org, which is connected from Tools, Mendbird helper instead. "Make a new key" in your account retires it.
 define( 'MENDBIRD_HELPER_KEY', '__MENDBIRD_KEY__' );
 define( 'MENDBIRD_HELPER_HOST', '__MENDBIRD_HOST__' );
-define( 'MENDBIRD_HELPER_VERSION', '1.0.0' );
+define( 'MENDBIRD_HELPER_VERSION', '1.1.0' );
+if ( ! defined( 'MENDBIRD_HELPER_URL' ) ) {
+	define( 'MENDBIRD_HELPER_URL', 'https://mendbird.com' );
+}
+
+/** The key and the site name it signs for: written into this copy, or saved when it was connected. Null if neither. */
+function mendbird_helper_key() {
+	// Split in two, so writing the key in leaves this comparison alone.
+	if ( '__MENDBIRD' . '_KEY__' !== MENDBIRD_HELPER_KEY ) {
+		return array( 'key' => MENDBIRD_HELPER_KEY, 'host' => MENDBIRD_HELPER_HOST, 'written' => true );
+	}
+	$saved = get_option( 'mendbird_helper_connection' );
+	return is_array( $saved ) && ! empty( $saved['key'] ) && ! empty( $saved['host'] ) ? $saved + array( 'written' => false ) : null;
+}
+
+/** This site's name without www, to check a key is for this site and not another. */
+function mendbird_helper_bare( $host ) {
+	return preg_replace( '/^www\./', '', strtolower( (string) $host ) );
+}
+function mendbird_helper_site() {
+	return (string) wp_parse_url( home_url(), PHP_URL_HOST );
+}
 
 /** The list: names, versions and five settings. Nothing else is ever read. */
 function mendbird_helper_list() {
@@ -91,10 +119,11 @@ function mendbird_helper_answer() {
 	}
 	$time = isset( $_SERVER['HTTP_MENDBIRD_TIME'] ) ? (string) $_SERVER['HTTP_MENDBIRD_TIME'] : '';
 	$sign = isset( $_SERVER['HTTP_MENDBIRD_SIGN'] ) ? strtolower( (string) $_SERVER['HTTP_MENDBIRD_SIGN'] ) : '';
-	if ( ! ctype_digit( $time ) || abs( time() - (int) $time ) > 300 || 64 !== strlen( $sign ) ) {
+	$creds = mendbird_helper_key();
+	if ( ! $creds || ! ctype_digit( $time ) || abs( time() - (int) $time ) > 300 || 64 !== strlen( $sign ) ) {
 		return;
 	}
-	if ( ! hash_equals( hash_hmac( 'sha256', 'pull:' . MENDBIRD_HELPER_HOST . ':' . $time, MENDBIRD_HELPER_KEY ), $sign ) ) {
+	if ( ! hash_equals( hash_hmac( 'sha256', 'pull:' . $creds['host'] . ':' . $time, $creds['key'] ), $sign ) ) {
 		return;
 	}
 	// Each signed request works once.
@@ -107,11 +136,145 @@ function mendbird_helper_answer() {
 	nocache_headers();
 	header( 'Content-Type: application/json; charset=utf-8' );
 	header( 'X-Robots-Tag: noindex' );
-	header( 'Mendbird-Sign: ' . hash_hmac( 'sha256', 'reply:' . $time . ':' . $body, MENDBIRD_HELPER_KEY ) );
+	header( 'Mendbird-Sign: ' . hash_hmac( 'sha256', 'reply:' . $time . ':' . $body, $creds['key'] ) );
 	echo $body; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- JSON, sent only to Mendbird.
 	exit;
 }
 add_action( 'init', 'mendbird_helper_answer', 0 );
+
+/**
+ * Connecting, step one: a random state for this visit, kept for half an hour, and the address on mendbird.com to send
+ * the admin to. Mendbird sends them back to this site's Tools page with the same state and a one time code.
+ */
+function mendbird_helper_connect_url() {
+	$state = wp_generate_password( 32, false );
+	set_transient( 'mendbird_helper_state', $state, 30 * MINUTE_IN_SECONDS );
+	return MENDBIRD_HELPER_URL . '/connect?' . http_build_query(
+		array(
+			'site'  => mendbird_helper_site(),
+			'back'  => admin_url( 'tools.php?page=mendbird-helper' ),
+			'state' => $state,
+		)
+	);
+}
+
+/**
+ * Step two: the state must be the one this site made, then the code is swapped for the key with one request to
+ * Mendbird. The key comes back over that request, never through the browser. Returns true, or a message.
+ */
+function mendbird_helper_finish( $code, $state ) {
+	$expected = get_transient( 'mendbird_helper_state' );
+	delete_transient( 'mendbird_helper_state' );
+	if ( ! is_string( $expected ) || ! hash_equals( $expected, (string) $state ) || ! preg_match( '/^[\w-]{20,100}$/', (string) $code ) ) {
+		return 'That link has run out or was not started from this site. Press Connect to Mendbird again.';
+	}
+	$res = wp_remote_post(
+		MENDBIRD_HELPER_URL . '/api/connect',
+		array(
+			'timeout' => 15,
+			'headers' => array( 'content-type' => 'application/json' ),
+			'body'    => wp_json_encode( array( 'code' => (string) $code ) ),
+		)
+	);
+	$reply = is_wp_error( $res ) ? null : json_decode( wp_remote_retrieve_body( $res ), true );
+	if ( 200 !== wp_remote_retrieve_response_code( $res ) || ! is_array( $reply ) ) {
+		return 'Mendbird could not be reached just now, or the code had run out. Press Connect to Mendbird again.';
+	}
+	return mendbird_helper_save( isset( $reply['key'] ) ? $reply['key'] : '', isset( $reply['host'] ) ? $reply['host'] : '', isset( $reply['site'] ) ? $reply['site'] : 0 );
+}
+
+/** A key pasted from the Mendbird account instead: "mb1:" then the site's name, then the key. */
+function mendbird_helper_paste( $text ) {
+	$parts = explode( ':', trim( (string) $text ) );
+	if ( 3 !== count( $parts ) || 'mb1' !== $parts[0] ) {
+		return 'That does not look like a Mendbird helper key. Copy the whole line from your account, starting mb1.';
+	}
+	return mendbird_helper_save( $parts[2], $parts[1], 0 );
+}
+
+/** Keeps a key, if it is for this site. */
+function mendbird_helper_save( $key, $host, $site ) {
+	if ( ! preg_match( '/^[\w-]{40,64}$/', (string) $key ) || ! preg_match( '/^[a-z0-9.-]{1,253}$/i', (string) $host ) ) {
+		return 'Mendbird sent back something unexpected. Press Connect to Mendbird again.';
+	}
+	if ( mendbird_helper_bare( $host ) !== mendbird_helper_bare( mendbird_helper_site() ) ) {
+		return sprintf( 'That key is for %s, but this site is %s. Use the key for this site.', $host, mendbird_helper_site() );
+	}
+	update_option( 'mendbird_helper_connection', array( 'key' => (string) $key, 'host' => strtolower( (string) $host ), 'site' => (int) $site ), false );
+	return true;
+}
+
+/** The buttons on the Tools page post here. Coming back from Mendbird with a code lands on the page itself. */
+function mendbird_helper_actions() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+	$back = admin_url( 'tools.php?page=mendbird-helper' );
+	// phpcs:disable WordPress.Security.NonceVerification.Recommended -- the state made for this visit does a nonce's job.
+	if ( isset( $_GET['page'], $_GET['mendbird_code'], $_GET['mendbird_state'] ) && 'mendbird-helper' === $_GET['page'] ) {
+		$done = mendbird_helper_finish( sanitize_text_field( wp_unslash( $_GET['mendbird_code'] ) ), sanitize_text_field( wp_unslash( $_GET['mendbird_state'] ) ) );
+		mendbird_helper_tell( $done, 'Connected. Mendbird reads this list every morning from now on.' );
+		wp_safe_redirect( $back );
+		exit;
+	}
+	// phpcs:enable
+	if ( ! isset( $_POST['mendbird_helper'] ) ) {
+		return;
+	}
+	check_admin_referer( 'mendbird_helper' );
+	$what = sanitize_key( wp_unslash( $_POST['mendbird_helper'] ) );
+	if ( 'connect' === $what ) {
+		// Off to mendbird.com, which sends the admin back here.
+		wp_redirect( mendbird_helper_connect_url() ); // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Mendbird's own address.
+		exit;
+	}
+	if ( 'paste' === $what && isset( $_POST['mendbird_key'] ) ) {
+		mendbird_helper_tell( mendbird_helper_paste( sanitize_text_field( wp_unslash( $_POST['mendbird_key'] ) ) ), 'Connected with the key you pasted.' );
+	}
+	if ( 'disconnect' === $what ) {
+		delete_option( 'mendbird_helper_connection' );
+		mendbird_helper_tell( true, 'Disconnected. Mendbird can no longer read this list.' );
+	}
+	wp_safe_redirect( $back );
+	exit;
+}
+add_action( 'admin_init', 'mendbird_helper_actions' );
+
+/** One message for the next view of the Tools page. */
+function mendbird_helper_tell( $done, $ok ) {
+	set_transient( 'mendbird_helper_said_' . get_current_user_id(), true === $done ? array( 'success', $ok ) : array( 'error', (string) $done ), 60 );
+}
+
+/** The top of the Tools page: connected or not, and how. */
+function mendbird_helper_connection_box() {
+	$said = get_transient( 'mendbird_helper_said_' . get_current_user_id() );
+	delete_transient( 'mendbird_helper_said_' . get_current_user_id() );
+	if ( is_array( $said ) ) {
+		echo '<div class="notice notice-' . esc_attr( $said[0] ) . '"><p>' . esc_html( $said[1] ) . '</p></div>';
+	}
+	$creds = mendbird_helper_key();
+	$form  = function ( $what, $inner, $button, $class ) {
+		echo '<form method="post" action="' . esc_url( admin_url( 'tools.php?page=mendbird-helper' ) ) . '" style="margin:.6em 0">';
+		wp_nonce_field( 'mendbird_helper' );
+		echo '<input type="hidden" name="mendbird_helper" value="' . esc_attr( $what ) . '">' . $inner . ' '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed markup.
+		submit_button( $button, $class, 'mendbird_' . $what, false );
+		echo '</form>';
+	};
+	echo '<div class="card" style="max-width:none">';
+	if ( $creds && $creds['written'] ) {
+		echo '<h2>Connected</h2><p>' . esc_html( sprintf( 'This copy was downloaded from your Mendbird account for %s, with its key written in.', $creds['host'] ) ) . '</p>';
+	} elseif ( $creds ) {
+		echo '<h2>Connected</h2><p>' . esc_html( sprintf( 'Mendbird reads this list every morning for %s.', $creds['host'] ) ) . '</p>';
+		$form( 'disconnect', '', 'Disconnect', 'secondary' );
+	} else {
+		echo '<h2>Connect to Mendbird</h2><p>Mendbird checks everything below against the lists of known security flaws every morning, and tells you what needs fixing in plain English. Connecting takes you to mendbird.com to sign in, or to start a free trial, and brings you back here.</p>';
+		$form( 'connect', '', 'Connect to Mendbird', 'primary' );
+		echo '<details><summary>Have a key from your Mendbird account? Paste it instead</summary>';
+		$form( 'paste', '<label for="mendbird-key" class="screen-reader-text">Helper key</label><input id="mendbird-key" name="mendbird_key" type="text" class="regular-text code" placeholder="mb1:" autocomplete="off" required>', 'Save the key', 'secondary' );
+		echo '</details>';
+	}
+	echo '</div>';
+}
 
 /** Tools, Mendbird helper: exactly what it sends, for anyone who can manage the site. */
 function mendbird_helper_page() {
@@ -144,6 +307,7 @@ function mendbird_helper_page() {
 	}
 
 	echo '<div class="wrap"><h1>Mendbird helper</h1>';
+	mendbird_helper_connection_box();
 	echo '<p>Once a day Mendbird asks this site for the list below, and checks every version against the lists of known security flaws. Nothing else is sent, and the helper never changes anything. To stop it, deactivate or delete the plugin.</p>';
 	echo '<h2>Software</h2><table class="widefat striped"><thead><tr><th>Kind</th><th>Name</th><th>Version</th><th>In use</th></tr></thead><tbody>' . $rows . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
 	echo '<p>' . esc_html( sprintf( 'PHP add-ons (%d): %s.', count( $exts ), implode( ', ', $exts ) ) ) . '</p>';
@@ -161,4 +325,5 @@ add_action(
 register_uninstall_hook( __FILE__, 'mendbird_helper_uninstall' );
 function mendbird_helper_uninstall() {
 	delete_option( 'mendbird_helper_last' );
+	delete_option( 'mendbird_helper_connection' );
 }

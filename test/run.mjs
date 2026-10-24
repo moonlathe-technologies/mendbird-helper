@@ -87,6 +87,50 @@ async function wordpress() {
   check(list.settings.debug_on === true && list.settings.admins === 1, `settings: debug mode on, one admin, counted not named ${JSON.stringify(list.settings)}`);
   check(!/private|owner|customer|test-only|@example/i.test(body), "no names, emails, posts or passwords anywhere in it");
   check(!(await ask(url, { time })).body.includes('"software"'), "the same signed request a second time: the normal page");
+  await connect(wp, url);
+}
+
+// The copy from wordpress.org has no key written in. Its Connect button goes to Mendbird, which sends the admin back
+// with a one time code; the plugin swaps the code for the key with a stand-in Mendbird on port 8090.
+async function connect(wp, url) {
+  console.log("\nWordPress plugin from wordpress.org, connected");
+  writeFileSync(`${out}wordpress/mendbird-helper.php`, readFileSync(`${here}../wordpress/mendbird-helper.php`, "utf8"));
+  await sleep(3000); // PHP's file cache in the site checks for changes every two seconds
+  const KEY2 = randomBytes(32).toString("base64url"), KEY3 = randomBytes(32).toString("base64url");
+  const asked = [];
+  const mendbird = createServer((req, res) => {
+    let body = "";
+    req.on("data", c => (body += c)).on("end", () => {
+      asked.push({ path: req.url, body });
+      const code = JSON.parse(body || "{}").code;
+      const answer = { "code-for-this-site-0001": { site: 7, host: HOST, key: KEY2 }, "code-for-another-site-01": { site: 8, host: "other.example", key: KEY3 } }[code];
+      res.writeHead(answer ? 200 : 400, { "content-type": "application/json" }).end(JSON.stringify(answer ?? { error: "no" }));
+    });
+  }).listen(8090);
+  try {
+    check(!(await ask(url)).body.includes('"software"'), "not connected yet: the normal page, even to the old key");
+    // Run without blocking this process, which is also the stand-in Mendbird the plugin calls.
+    const php = async code => (await shAsync("docker", ["compose", "-p", "mendbird-helper-test", "-f", "compose.yml", "exec", "-T", "cli", "wp", "eval", code])).trim();
+    const start = new URL(await php("echo mendbird_helper_connect_url();"));
+    const state = start.searchParams.get("state");
+    check(start.origin === "http://host.docker.internal:8090" && start.pathname === "/connect" && start.searchParams.get("site") === HOST && /\/wp-admin\/tools\.php\?page=mendbird-helper$/.test(start.searchParams.get("back")) && /^\w{32}$/.test(state), "Connect sends the admin to Mendbird with the site, the way back and a state");
+    check(/not started from this site/.test(await php(`var_export(mendbird_helper_finish("code-for-this-site-0001", "a-state-it-never-made-000"));`)), "a code with someone else's state is refused, and Mendbird is not even asked");
+    check(asked.length === 0, "nothing was sent for it");
+    const again = new URL(await php("echo mendbird_helper_connect_url();")).searchParams.get("state");
+    check(await php(`var_export(mendbird_helper_finish("code-for-this-site-0001", "${again}"));`) === "true", "the right state: the code is swapped for the key");
+    check(asked.length === 1 && asked[0].path === "/api/connect" && asked[0].body === '{"code":"code-for-this-site-0001"}', "the swap sends only the code");
+    check(await php("echo wp_json_encode(get_option('mendbird_helper_connection'));") === JSON.stringify({ key: KEY2, host: HOST, site: 7 }), "the key is kept in the site's options");
+    check(!(await php("echo implode(',', array_keys(wp_load_alloptions()));")).split(",").includes("mendbird_helper_connection"), "and not loaded on every page");
+    const time = Math.floor(Date.now() / 1000) + 2;
+    const pulled = await ask(url, { key: KEY2, time });
+    check(pulled.res.status === 200 && pulled.body.includes('"software"') && same(pulled.res.headers.get("mendbird-sign") ?? "", createHmac("sha256", KEY2).update(`reply:${time}:${pulled.body}`).digest("hex")), "Mendbird's request with the new key: the list, signed with it");
+    check(/not started from this site/.test(await php(`var_export(mendbird_helper_finish("code-for-this-site-0001", "${again}"));`)), "the same way back a second time is refused");
+    const third = new URL(await php("echo mendbird_helper_connect_url();")).searchParams.get("state");
+    check(/is for other\.example, but this site is localhost/.test(await php(`var_export(mendbird_helper_finish("code-for-another-site-01", "${third}"));`)), "a key for another site is refused");
+    check(/does not look like a Mendbird helper key/.test(await php(`var_export(mendbird_helper_paste("${KEY3}"));`)), "a pasted key needs its whole line");
+    check(await php(`var_export(mendbird_helper_paste("mb1:${HOST}:${KEY3}"));`) === "true", "a pasted line with this site's name is kept");
+    check((await ask(url, { key: KEY3, time: time + 1 })).body.includes('"software"') && !(await ask(url, { key: KEY2, time: time + 2 })).body.includes('"software"'), "the pasted key replaces the old one");
+  } finally { mendbird.close(); }
 }
 
 async function php() {
