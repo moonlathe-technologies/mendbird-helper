@@ -282,13 +282,15 @@ function mendbird_helper_page() {
 		return;
 	}
 	// The tables are drawn from the same list Mendbird receives, so they can never show less than is sent.
-	$list  = mendbird_helper_list();
-	$kinds = array( 'cms' => 'WordPress', 'plugin' => 'Plugin', 'theme' => 'Theme', 'php' => 'PHP', 'db' => 'Database', 'server' => 'Web server' );
-	$rows  = '';
-	$exts  = array();
+	$list      = mendbird_helper_list();
+	$kinds     = array( 'cms' => 'WordPress', 'plugin' => 'Plugin', 'theme' => 'Theme', 'php' => 'PHP', 'db' => 'Database', 'server' => 'Web server' );
+	$rows      = '';
+	$exts      = '';
+	$ext_count = 0;
 	foreach ( $list['software'] as $item ) {
 		if ( 'ext' === $item['kind'] ) {
-			$exts[] = $item['name'] . ( '' !== $item['version'] ? ' ' . $item['version'] : '' );
+			$exts .= '<tr><td>' . esc_html( $item['name'] ) . '</td><td>' . esc_html( $item['version'] ) . '</td></tr>';
+			++$ext_count;
 			continue;
 		}
 		$use   = isset( $item['active'] ) ? ( $item['active'] ? 'Switched on' : 'Switched off' ) : '';
@@ -310,8 +312,8 @@ function mendbird_helper_page() {
 	mendbird_helper_connection_box();
 	echo '<p>Once a day Mendbird asks this site for the list below, and checks every version against the lists of known security flaws. Nothing else is sent, and the helper never changes anything. To stop it, deactivate or delete the plugin.</p>';
 	echo '<h2>Software</h2><table class="widefat striped"><thead><tr><th>Kind</th><th>Name</th><th>Version</th><th>In use</th></tr></thead><tbody>' . $rows . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
-	echo '<p>' . esc_html( sprintf( 'PHP add-ons (%d): %s.', count( $exts ), implode( ', ', $exts ) ) ) . '</p>';
 	echo '<h2>Settings</h2><table class="widefat striped"><tbody>' . $settings . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
+	echo '<h2>' . esc_html( sprintf( 'PHP add-ons (%d)', $ext_count ) ) . '</h2><table class="widefat striped"><thead><tr><th>Name</th><th>Version</th></tr></thead><tbody>' . $exts . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
 	echo '<details style="margin-top:1.5em"><summary>Show the exact data, as Mendbird receives it</summary>';
 	echo '<pre style="background:#fff;border:1px solid #ccd0d4;padding:12px;max-height:60vh;overflow:auto;white-space:pre-wrap">' . esc_html( wp_json_encode( $list, JSON_PRETTY_PRINT ) ) . '</pre></details></div>';
 }
