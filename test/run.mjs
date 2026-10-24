@@ -1,6 +1,6 @@
 // Runs each helper for real, in Docker, and checks it from the outside the way Mendbird talks to it.
 //   node helpers/test/run.mjs            everything
-//   node helpers/test/run.mjs linux      one part: wordpress, php, linux, apps or github
+//   node helpers/test/run.mjs linux      one part: wordpress, php, laravel, linux, apps or github
 // Needs Docker. Uses its own copy of the signing rules (HMAC-SHA256 over "pull:host:time", "reply:time:body" and
 // "push:time:body"), so it checks the helpers against the published design, not against Mendbird's code.
 import { execFile, execFileSync } from "node:child_process";
@@ -157,6 +157,38 @@ async function php() {
   check(JSON.parse(shown).helper.kind === "php", "php mendbird-helper.php --show prints the list on the server");
 }
 
+// Laravel: a fresh app with the package from helpers/laravel, its settings and routes cached as on a live server.
+async function laravel() {
+  console.log("\nLaravel package");
+  const name = "mendbird-laravel-test";
+  sh("docker", ["rm", "-f", name]);
+  sh("docker", ["run", "-d", "--name", name, "-p", "8084:8000", "-v", `${here}../laravel:/pkg:ro`, "composer:2", "sh", "-c",
+    ["composer create-project -q --no-interaction laravel/laravel /app", "cd /app", "composer config repositories.mendbird path /pkg", "composer require -q --no-interaction mendbird/helper:@dev",
+      `printf 'MENDBIRD_KEY=${KEY}\\nMENDBIRD_HOST=${HOST}\\n' >> .env`, "php artisan config:cache", "php artisan route:cache", "php artisan serve --host=0.0.0.0 --port=8000"].join(" && ")]);
+  try {
+    const url = "http://localhost:8084/mendbird-helper";
+    // Fetching while the app is still being built trips up Node's HTTP client, so wait for the server to say it is up.
+    for (let i = 0; !sh("docker", ["logs", name], { stdio: ["ignore", "pipe", "pipe"] }).includes("Server running"); i++) { if (i > 150) throw new Error("Laravel never came up"); await sleep(2000); }
+    const stranger = await fetch(url);
+    check(stranger.status === 404 && (await stranger.text()) === "Not found\n", "unsigned: Not found");
+    check(!stranger.headers.get("set-cookie"), "no cookies and no session");
+    check((await ask(url, { key: "a-guess" })).res.status === 404, "signed with the wrong key: Not found");
+    check((await ask(url, { time: Math.floor(Date.now() / 1000) - 600 })).res.status === 404, "ten minutes old: Not found");
+    const { res, body, signed } = await ask(url);
+    check(res.status === 200 && signed, "Mendbird's request: the list, signed, with settings and routes cached");
+    const list = JSON.parse(body);
+    check(onlyAllowed(list) && list.helper.kind === "laravel", "the list holds only the agreed fields");
+    check(list.software.some(s => s.kind === "composer" && s.name === "laravel/framework" && /^\d+\.\d+/.test(s.version)), "Laravel's own version, from Composer's record");
+    check(!list.software.some(s => s.name === "phpunit/phpunit"), "packages for development only are left out");
+    check(list.settings.debug_on === true, "a new app's debug mode is seen as on");
+    check(!/APP_KEY|base64:|DB_PASSWORD/.test(body), "nothing from the .env file");
+    const shown = sh("docker", ["exec", "-w", "/app", name, "php", "artisan", "mendbird:show"]);
+    check(JSON.parse(shown).helper.kind === "laravel", "php artisan mendbird:show prints the list");
+  } finally {
+    if (!process.env.KEEP) sh("docker", ["rm", "-f", name]);
+  }
+}
+
 // Linux: each system posts to a receiver here, which checks the signature, the time and the shape.
 const SYSTEMS = [
   ["debian:12", "apt-get update -qq && apt-get install -y -qq curl openssl nginx-light php-cli >/dev/null", "deb", "debian"],
@@ -256,6 +288,7 @@ async function github() {
 try {
   if (!only || only === "wordpress") await wordpress();
   if (!only || only === "php") await php();
+  if (!only || only === "laravel") await laravel();
   if (!only || only === "linux") await linux();
   if (!only || only === "apps") await apps();
   if (!only || only === "github") await github();

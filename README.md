@@ -7,12 +7,13 @@ It reads names and version numbers, nothing else. It answers only Mendbird, take
 anything. This is all of its code, so you can check that for yourself before you install it. The page written for
 site owners and IT teams is at [mendbird.com/helper](https://mendbird.com/helper).
 
-## The four helpers
+## The five helpers
 
 | Folder | For | How it talks to Mendbird |
 | --- | --- | --- |
 | [`wordpress/`](wordpress/mendbird-helper.php) | WordPress sites. A plugin, uploaded from the dashboard. | Answers a signed request at `/?mendbird-helper`. |
-| [`php/`](php/mendbird-helper.php) | Joomla, Drupal, Laravel and hand built PHP sites. One file. | Answers a signed request at `/mendbird-helper.php`. |
+| [`laravel/`](laravel/) | Laravel apps. A Composer package, `mendbird/helper`, with two lines for `.env`. | Answers a signed request at `/mendbird-helper`. |
+| [`php/`](php/mendbird-helper.php) | Joomla, Drupal and hand built PHP sites. One file. | Answers a signed request at `/mendbird-helper.php`. |
 | [`linux/`](linux/mendbird-helper) | Linux servers you run yourself, and the Python, Node.js, PHP, Ruby, Rust and Go apps on them. A POSIX shell script, run daily from cron. | Posts a signed list to `https://mendbird.com/api/helper`. |
 | [`github/`](github/mendbird.yml) | Sites deployed from a GitHub repository: Cloudflare Workers and Pages, Vercel, Netlify, AWS Lambda. A workflow file. | Posts a signed list to `https://mendbird.com/api/helper`. |
 
@@ -27,6 +28,9 @@ written into the workflow file.
   add-ons, the database and the web server. Five settings: whether debug mode shows errors to visitors, whether admins
   can edit code from the dashboard, whether plugins update themselves, whether PHP announces its version, and how many
   admin accounts there are (a number, never names).
+- **Laravel:** PHP and its add-ons, the web server, and the packages in `vendor/composer/installed.json` (Laravel
+  itself among them, leaving out packages for development only). Two settings: whether Laravel's debug mode is on,
+  and whether PHP announces its version.
 - **PHP:** PHP and its add-ons, the web server, Joomla or Drupal's version, and the packages in `composer.lock`
   (leaving out packages for development only). Two settings: whether PHP shows errors to visitors, and whether it
   announces its version.
@@ -62,6 +66,7 @@ signature, the WordPress plugin does nothing (the site shows its normal page) an
 ## See what it sends
 
 - WordPress: Tools, Mendbird helper.
+- Laravel: `php artisan mendbird:show`
 - PHP: `php mendbird-helper.php --show`
 - Linux: `mendbird-helper --show`
 - GitHub: every run prints the list in the workflow's log. Locally, `node github/mendbird-helper.mjs --show` in your
@@ -70,9 +75,9 @@ signature, the WordPress plugin does nothing (the site shows its normal page) an
 ## Tests
 
 `node test/run.mjs` runs every helper for real in Docker and checks it from the outside, the way Mendbird talks to it:
-WordPress with MariaDB, a plain PHP site, Debian 12, Ubuntu 24.04, Alpine 3.20 and Rocky Linux 9, a Debian server
+WordPress with MariaDB, a new Laravel app with the package installed through Composer, a plain PHP site, Debian 12, Ubuntu 24.04, Alpine 3.20 and Rocky Linux 9, a Debian server
 running a real Django, Node.js, PHP, Ruby, Rust and Go app, and the GitHub program in a clean Node.js container. It checks the signatures, that strangers get nothing, that only the agreed
-fields are sent, and that nothing personal ever appears. Run one part with `node test/run.mjs wordpress` (or `php`,
+fields are sent, and that nothing personal ever appears. Run one part with `node test/run.mjs wordpress` (or `laravel`, `php`,
 `linux`, `apps`, `github`). It needs Node.js 22 and Docker.
 
 ## Security
