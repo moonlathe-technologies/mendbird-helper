@@ -3,7 +3,7 @@
  * Plugin Name:       Mendbird Helper
  * Plugin URI:        https://mendbird.com/helper
  * Description:       Lets Mendbird read the exact version of WordPress, your plugins, your theme, PHP and your database, so it can check each one against the lists of known security flaws every morning. It only reads, sends no content or personal details, and answers only Mendbird. See what it sends under Tools, Mendbird helper.
- * Version:           1.0.0
+ * Version:           1.1.0
  * Requires at least: 5.5
  * Requires PHP:      7.4
  * Author:            Mendbird
