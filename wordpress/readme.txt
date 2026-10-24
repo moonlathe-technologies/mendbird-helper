@@ -58,6 +58,11 @@ Press Disconnect under Tools, Mendbird helper, or deactivate or delete the plugi
 
 No. It only reads. Mendbird tells you what to update, and you or your developer do it.
 
+== Screenshots ==
+
+1. Tools, Mendbird helper before connecting: everything Mendbird would read, and the Connect to Mendbird button.
+2. Connected: Mendbird reads the same list every morning, and you can disconnect at any time.
+
 == Changelog ==
 
 = 1.1.0 =

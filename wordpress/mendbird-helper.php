@@ -279,6 +279,28 @@ function mendbird_helper_connection_box() {
 	echo '</div>';
 }
 
+/** The Mendbird bird, drawn inline so the page loads nothing from anywhere else. The same drawing as on mendbird.com. */
+function mendbird_helper_bird() {
+	return '<svg class="mendbird-bird" viewBox="0 0 300 300" aria-hidden="true"><g transform="translate(9 8)" fill="#ff48b0" fill-opacity=".9" style="mix-blend-mode:multiply"><path fill-rule="evenodd" d="M150 54c66 0 110 48 110 112 0 60-46 100-110 100S40 226 40 166C40 102 84 54 150 54zM150 150c40 0 66 22 66 52s-30 50-66 50-66-20-66-50 26-52 66-52z"/><path d="M44 160c-22 6-34 28-26 46 18-2 34-14 40-30zM130 52c6-18 22-26 34-20-4 10-12 18-26 22zM138 150l12 22 12-22z"/></g><g fill="none" stroke="#0078bf" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M150 54c66 0 110 48 110 112 0 60-46 100-110 100S40 226 40 166C40 102 84 54 150 54z"/><path d="M150 150c40 0 66 22 66 52s-30 50-66 50-66-20-66-50 26-52 66-52z"/><path d="M118 196c20 6 44 6 64 0M126 214c16 4 32 4 48 0"/><path d="M44 160c-22 6-34 28-26 46 18-2 34-14 40-30z"/><path d="M130 52c6-18 22-26 34-20-4 10-12 18-26 22"/><circle cx="116" cy="124" r="22"/><circle cx="184" cy="124" r="22"/><path d="M138 150l12 22 12-22z"/><path d="M134 266v16m-10 0h20M168 266v16m-10 0h20"/><g transform="translate(240 170) rotate(30)"><path d="M-7 0h14v62h-14zM-18-2a18 18 0 1 0 36 0v12h-11v-16h-14v16h-11z"/></g></g><circle class="eye" cx="122" cy="128" r="9" fill="#0078bf"/><circle class="eye" cx="190" cy="128" r="9" fill="#0078bf"/></svg>';
+}
+
+/** The top of the Tools page: the bird, the name, and the pages on mendbird.com that explain what it finds. */
+function mendbird_helper_masthead() {
+	$links = array(
+		'https://mendbird.com/account' => 'Your Mendbird account',
+		'https://mendbird.com/helper'  => 'How the helper works',
+		'https://mendbird.com/checks'  => 'Every check explained',
+		'https://mendbird.com/flaws'   => 'Kinds of security flaw',
+	);
+	$items = array();
+	foreach ( $links as $url => $label ) {
+		$items[] = '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener">' . esc_html( $label ) . '<span class="screen-reader-text"> (opens in a new tab)</span></a>';
+	}
+	echo '<style>.mendbird-head{display:flex;align-items:center;gap:14px;margin:14px 0 6px}.mendbird-head h1{margin:0;padding:0}.mendbird-bird{width:60px;height:60px;flex:none;background:#fff;border:2px solid #23262d;border-radius:50%;padding:4px;box-sizing:border-box}.mendbird-links{margin:0 0 14px}</style>';
+	echo '<div class="mendbird-head">' . mendbird_helper_bird() . '<h1>Mendbird helper</h1></div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed drawing.
+	echo '<p class="mendbird-links">' . implode( ' | ', $items ) . '</p>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
+}
+
 /** Tools, Mendbird helper: exactly what it sends, for anyone who can manage the site. */
 function mendbird_helper_page() {
 	if ( ! current_user_can( 'manage_options' ) ) {
@@ -311,7 +333,8 @@ function mendbird_helper_page() {
 		$settings .= '<tr><td>' . esc_html( $labels[ $key ] ) . '</td><td>' . esc_html( is_bool( $value ) ? ( $value ? 'Yes' : 'No' ) : (string) $value ) . '</td></tr>';
 	}
 
-	echo '<div class="wrap"><h1>Mendbird helper</h1>';
+	echo '<div class="wrap">';
+	mendbird_helper_masthead();
 	mendbird_helper_connection_box();
 	echo '<p>Once connected, Mendbird asks this site for the list below once a day, and checks every version against the lists of known security flaws. Nothing else is sent, and the helper never changes anything.</p>';
 	echo '<h2>Software</h2><table class="widefat striped"><thead><tr><th>Kind</th><th>Name</th><th>Version</th><th>In use</th></tr></thead><tbody>' . $rows . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
