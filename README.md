@@ -31,9 +31,11 @@ written into the workflow file.
 - **Laravel:** PHP and its add-ons, the web server, and the packages in `vendor/composer/installed.json` (Laravel
   itself among them, leaving out packages for development only). Two settings: whether Laravel's debug mode is on,
   and whether PHP announces its version.
-- **PHP:** PHP and its add-ons, the web server, Joomla or Drupal's version, and the packages in `composer.lock`
-  (leaving out packages for development only). Two settings: whether PHP shows errors to visitors, and whether it
-  announces its version.
+- **PHP:** PHP and its add-ons, the web server, Joomla or Drupal's version, every Composer package installed (from
+  `vendor/composer/installed.json`, or else `composer.lock`) and the JavaScript packages in `package-lock.json`,
+  leaving out packages for development only. It looks in its own folder and up to three above, and in the usual app
+  folders beside each (`app`, `etc/app`, `src`, `application`, `backend`, `laravel`, `site`, `private`). Two settings:
+  whether PHP shows errors to visitors, and whether it announces its version.
 - **Linux:** the operating system and its installed packages (via `dpkg-query`, `rpm` or `apk`), and the versions of
   the web server, PHP, Node.js and the database. For each app folder you list on its `APPS` line, it reads the
   packages the app is built from, only ever reading files, never running anything in the app:

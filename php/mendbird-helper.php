@@ -1,10 +1,11 @@
 <?php
 /**
- * Mendbird helper for PHP sites: Joomla, Drupal, Laravel and hand built. Version 1.0.0.
+ * Mendbird helper for PHP sites: Joomla, Drupal, Laravel and hand built. Version 1.1.0.
  *
  * Put this one file in your site's public folder. It lets Mendbird read the exact version of PHP and its add-ons,
- * Joomla or Drupal if it finds them, and every package listed in your composer.lock, so it can check each one
- * against the lists of known security flaws every morning.
+ * Joomla or Drupal if it finds them, every Composer package the site has installed, and the JavaScript packages in
+ * its package-lock.json, so it can check each one against the lists of known security flaws every morning. It looks
+ * in this folder and up to three above it, and in the usual app folders beside each (app, etc/app, src and so on).
  *
  * How it works, in full, because you should be able to check:
  *
@@ -26,19 +27,90 @@
 // Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
 const MENDBIRD_HELPER_KEY = '__MENDBIRD_KEY__';
 const MENDBIRD_HELPER_HOST = '__MENDBIRD_HOST__';
-const MENDBIRD_HELPER_VERSION = '1.0.0';
+const MENDBIRD_HELPER_VERSION = '1.1.0';
 
-/** The first of these folders that holds the named file: this one, then up to three above it. */
+/**
+ * The first of these folders that holds the named file: this one, then up to three above it, and beside each of those
+ * the folders apps are usually kept in, as a site's public folder is often next to its code rather than inside it.
+ */
 function mendbird_helper_find($name)
 {
     $dir = __DIR__;
     for ($i = 0; $i < 4; $i++) {
-        if (is_file($dir . '/' . $name)) {
-            return $dir . '/' . $name;
+        foreach (array('', '/app', '/etc/app', '/src', '/application', '/backend', '/laravel', '/site', '/private') as $sub) {
+            if (is_file($dir . $sub . '/' . $name)) {
+                return $dir . $sub . '/' . $name;
+            }
         }
         $dir = dirname($dir);
     }
     return null;
+}
+
+/** A JSON file as an array, or an empty one if it is missing or not JSON. */
+function mendbird_helper_json($file)
+{
+    $data = $file ? json_decode((string) file_get_contents($file), true) : null;
+    return is_array($data) ? $data : array();
+}
+
+/**
+ * Every Composer package installed, from what Composer itself records in vendor/composer/installed.json, or else the
+ * lock file. Packages for development only are left out, as they are not usually on a live site.
+ */
+function mendbird_helper_composer()
+{
+    $found = array();
+    $installed = mendbird_helper_json(mendbird_helper_find('vendor/composer/installed.json'));
+    if ($installed) {
+        // Composer 2 wraps the list and names the development packages; Composer 1 is the bare list.
+        $packages = isset($installed['packages']) ? $installed['packages'] : $installed;
+        $dev = isset($installed['dev-package-names']) && is_array($installed['dev-package-names']) ? $installed['dev-package-names'] : array();
+    } else {
+        $lock = mendbird_helper_json(mendbird_helper_find('composer.lock'));
+        $packages = isset($lock['packages']) ? $lock['packages'] : array();
+        $dev = array();
+    }
+    foreach (is_array($packages) ? $packages : array() as $p) {
+        if (isset($p['name'], $p['version']) && !in_array($p['name'], $dev, true)) {
+            $found[] = array('kind' => 'composer', 'name' => (string) $p['name'], 'version' => ltrim((string) $p['version'], 'v'));
+        }
+    }
+    return $found;
+}
+
+/**
+ * The JavaScript packages the site is built with, from npm's record of what it installed (node_modules/.package-lock.json)
+ * or else package-lock.json. Packages for development only are left out.
+ */
+function mendbird_helper_npm()
+{
+    $lock = mendbird_helper_json(mendbird_helper_find('node_modules/.package-lock.json'));
+    if (!$lock) {
+        $lock = mendbird_helper_json(mendbird_helper_find('package-lock.json'));
+    }
+    $found = array();
+    $seen = array();
+    // Lock files from npm 7 on key each package by its folder; older ones nest them under "dependencies".
+    $packages = isset($lock['packages']) && is_array($lock['packages']) ? $lock['packages'] : array();
+    if (!$packages && isset($lock['dependencies']) && is_array($lock['dependencies'])) {
+        foreach ($lock['dependencies'] as $name => $p) {
+            $packages['node_modules/' . $name] = $p;
+        }
+    }
+    foreach ($packages as $path => $p) {
+        $at = strrpos((string) $path, 'node_modules/');
+        if ($at === false || !is_array($p) || !empty($p['dev']) || !isset($p['version'])) {
+            continue;
+        }
+        $name = isset($p['name']) ? (string) $p['name'] : substr((string) $path, $at + 13);
+        $key = $name . '@' . $p['version'];
+        if (!isset($seen[$key])) {
+            $seen[$key] = true;
+            $found[] = array('kind' => 'npm', 'name' => $name, 'version' => (string) $p['version']);
+        }
+    }
+    return $found;
 }
 
 /** The list: names, versions and two settings. Nothing else is ever read. */
@@ -53,17 +125,7 @@ function mendbird_helper_list()
         $software[] = array('kind' => 'server', 'name' => strtolower($m[1]), 'version' => isset($m[2]) ? $m[2] : '');
     }
 
-    // Composer's lock file lists every package the site is built from, with its exact version. Only the names and
-    // versions are taken; packages for development only are left out, as they are not usually on a live site.
-    $lock = mendbird_helper_find('composer.lock');
-    if ($lock) {
-        $data = json_decode((string) file_get_contents($lock), true);
-        foreach (isset($data['packages']) && is_array($data['packages']) ? $data['packages'] : array() as $p) {
-            if (isset($p['name'], $p['version'])) {
-                $software[] = array('kind' => 'composer', 'name' => (string) $p['name'], 'version' => ltrim((string) $p['version'], 'v'));
-            }
-        }
-    }
+    $software = array_merge($software, mendbird_helper_composer(), mendbird_helper_npm());
 
     // Joomla keeps its version in a small manifest; Drupal in one line of its core. Only that line is read.
     $joomla = mendbird_helper_find('administrator/manifests/files/joomla.xml');
