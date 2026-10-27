@@ -3,7 +3,7 @@
  * Plugin Name:       Mendbird Helper
  * Plugin URI:        https://mendbird.com/helper
  * Description:       Lets Mendbird read the exact version of WordPress, your plugins, your theme, PHP and your database, so it can check each one against the lists of known security flaws every morning. It only reads, sends no content or personal details, and answers only Mendbird. See what it sends under Tools, Mendbird helper.
- * Version:           1.1.0
+ * Version:           1.1.1
  * Requires at least: 5.5
  * Requires PHP:      7.4
  * Author:            Mendbird
@@ -39,7 +39,7 @@ defined( 'ABSPATH' ) || exit;
 // wordpress.org, which is connected from Tools, Mendbird helper instead. "Make a new key" in your account retires it.
 define( 'MENDBIRD_HELPER_KEY', '__MENDBIRD_KEY__' );
 define( 'MENDBIRD_HELPER_HOST', '__MENDBIRD_HOST__' );
-define( 'MENDBIRD_HELPER_VERSION', '1.1.0' );
+define( 'MENDBIRD_HELPER_VERSION', '1.1.1' );
 if ( ! defined( 'MENDBIRD_HELPER_URL' ) ) {
 	define( 'MENDBIRD_HELPER_URL', 'https://mendbird.com' );
 }
@@ -257,13 +257,13 @@ function mendbird_helper_connection_box() {
 	}
 	$creds = mendbird_helper_key();
 	$form  = function ( $what, $inner, $button, $class ) {
-		echo '<form method="post" action="' . esc_url( admin_url( 'tools.php?page=mendbird-helper' ) ) . '" style="margin:.6em 0">';
+		echo '<form method="post" action="' . esc_url( admin_url( 'tools.php?page=mendbird-helper' ) ) . '" class="mendbird-form">';
 		wp_nonce_field( 'mendbird_helper' );
 		echo '<input type="hidden" name="mendbird_helper" value="' . esc_attr( $what ) . '">' . $inner . ' '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed markup.
 		submit_button( $button, $class, 'mendbird_' . $what, false );
 		echo '</form>';
 	};
-	echo '<div class="card" style="max-width:none">';
+	echo '<div class="card mendbird-card">';
 	if ( $creds && $creds['written'] ) {
 		echo '<h2>Connected</h2><p>' . esc_html( sprintf( 'This copy was downloaded from your Mendbird account for %s, with its key written in. To stop it, deactivate or delete the plugin.', $creds['host'] ) ) . '</p>';
 	} elseif ( $creds ) {
@@ -296,7 +296,6 @@ function mendbird_helper_masthead() {
 	foreach ( $links as $url => $label ) {
 		$items[] = '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener">' . esc_html( $label ) . '<span class="screen-reader-text"> (opens in a new tab)</span></a>';
 	}
-	echo '<style>.mendbird-head{display:flex;align-items:center;gap:14px;margin:14px 0 6px}.mendbird-head h1{margin:0;padding:0}.mendbird-bird{width:60px;height:60px;flex:none;background:#fff;border:2px solid #23262d;border-radius:50%;padding:4px;box-sizing:border-box}.mendbird-links{margin:0 0 14px}</style>';
 	echo '<div class="mendbird-head">' . mendbird_helper_bird() . '<h1>Mendbird helper</h1></div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed drawing.
 	echo '<p class="mendbird-links">' . implode( ' | ', $items ) . '</p>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
 }
@@ -340,9 +339,21 @@ function mendbird_helper_page() {
 	echo '<h2>Software</h2><table class="widefat striped"><thead><tr><th>Kind</th><th>Name</th><th>Version</th><th>In use</th></tr></thead><tbody>' . $rows . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
 	echo '<h2>Settings</h2><table class="widefat striped"><tbody>' . $settings . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
 	echo '<h2>' . esc_html( sprintf( 'PHP add-ons (%d)', $ext_count ) ) . '</h2><table class="widefat striped"><thead><tr><th>Name</th><th>Version</th></tr></thead><tbody>' . $exts . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above.
-	echo '<details style="margin-top:1.5em"><summary>Show the exact data, as Mendbird receives it</summary>';
-	echo '<pre style="background:#fff;border:1px solid #ccd0d4;padding:12px;max-height:60vh;overflow:auto;white-space:pre-wrap">' . esc_html( wp_json_encode( $list, JSON_PRETTY_PRINT ) ) . '</pre></details></div>';
+	echo '<details class="mendbird-raw"><summary>Show the exact data, as Mendbird receives it</summary>';
+	echo '<pre>' . esc_html( wp_json_encode( $list, JSON_PRETTY_PRINT ) ) . '</pre></details></div>';
 }
+// The Tools page's few styles, loaded the WordPress way and only on that page. They live here rather than in a file,
+// as the copy downloaded from a Mendbird account is the one PHP file.
+function mendbird_helper_styles( $hook ) {
+	if ( 'tools_page_mendbird-helper' !== $hook ) {
+		return;
+	}
+	wp_register_style( 'mendbird-helper', false, array(), MENDBIRD_HELPER_VERSION );
+	wp_enqueue_style( 'mendbird-helper' );
+	wp_add_inline_style( 'mendbird-helper', '.mendbird-head{display:flex;align-items:center;gap:14px;margin:14px 0 6px}.mendbird-head h1{margin:0;padding:0}.mendbird-bird{width:60px;height:60px;flex:none;background:#fff;border:2px solid #23262d;border-radius:50%;padding:4px;box-sizing:border-box}.mendbird-links{margin:0 0 14px}.mendbird-card{max-width:none}.mendbird-form{margin:.6em 0}.mendbird-raw{margin-top:1.5em}.mendbird-raw pre{background:#fff;border:1px solid #ccd0d4;padding:12px;max-height:60vh;overflow:auto;white-space:pre-wrap}' );
+}
+add_action( 'admin_enqueue_scripts', 'mendbird_helper_styles' );
+
 add_action(
 	'admin_menu',
 	function () {

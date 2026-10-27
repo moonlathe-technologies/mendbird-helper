@@ -4,7 +4,7 @@ Tags: security, vulnerabilities, updates, plugins, monitoring
 Requires at least: 5.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -64,6 +64,9 @@ No. It only reads. Mendbird tells you what to update, and you or your developer 
 2. Connected: Mendbird reads the same list every morning, and you can disconnect at any time.
 
 == Changelog ==
+
+= 1.1.1 =
+* The Tools page loads its styles with wp_enqueue_style, only on that page.
 
 = 1.1.0 =
 * Connect to Mendbird from Tools, Mendbird helper, or paste a key, so the plugin works when installed from wordpress.org.
