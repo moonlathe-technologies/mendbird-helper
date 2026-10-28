@@ -1,10 +1,11 @@
 <?php
 /**
- * Mendbird helper for PHP sites: Joomla, Drupal, Laravel and hand built. Version 1.1.0.
+ * Mendbird helper for PHP sites: Joomla, Drupal, Laravel and hand built. Version 1.2.0.
  *
  * Put this one file in your site's public folder. It lets Mendbird read the exact version of PHP and its add-ons,
- * Joomla or Drupal if it finds them, every Composer package the site has installed, and the JavaScript packages in
- * its package-lock.json, so it can check each one against the lists of known security flaws every morning. It looks
+ * Joomla or Drupal if it finds them, every Composer package the site has installed, the JavaScript packages in its
+ * package-lock.json, and the server's system packages, so it can check each one against the lists of known security
+ * flaws every morning. It looks
  * in this folder and up to three above it, and in the usual app folders beside each (app, etc/app, src and so on).
  *
  * How it works, in full, because you should be able to check:
@@ -14,7 +15,7 @@
  * 2. If the signature is right and the time is within five minutes, this file replies with the list, signed with the
  *    same key so Mendbird knows it was not changed on the way. To anyone else it says "Not found".
  * 3. The list is names and version numbers, and two settings: whether PHP shows errors to visitors, and whether it
- *    announces its version.
+ *    announces its version. The system's packages come from the files its package manager keeps; nothing is run.
  *
  * It never reads your database, your .env or settings files, your content or anyone's details, never contacts
  * anyone, and never changes anything. Delete it and it stops. To see exactly what it sends, run this on the server:
@@ -27,7 +28,7 @@
 // Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
 const MENDBIRD_HELPER_KEY = '__MENDBIRD_KEY__';
 const MENDBIRD_HELPER_HOST = '__MENDBIRD_HOST__';
-const MENDBIRD_HELPER_VERSION = '1.1.0';
+const MENDBIRD_HELPER_VERSION = '1.2.0';
 
 /**
  * The first of these folders that holds the named file: this one, then up to three above it, and beside each of those
@@ -113,10 +114,48 @@ function mendbird_helper_npm()
     return $found;
 }
 
+/**
+ * The server's system and its packages, from the files its package manager keeps (Debian and Ubuntu's dpkg status,
+ * Alpine's apk database). Systems patch the web server, PHP and the rest without changing their headline version,
+ * so this is what tells a patched nginx 1.26.3 from an old one. Named by source package, as security notices are.
+ * Nothing is run; on a host that keeps these files out of reach, nothing is sent.
+ */
+function mendbird_helper_system()
+{
+    $os = @is_readable('/etc/os-release') ? (string) @file_get_contents('/etc/os-release') : '';
+    if (!preg_match('/^ID="?([\w.-]+)/m', $os, $id)) {
+        return array();
+    }
+    $found = array(array('kind' => 'os', 'name' => strtolower($id[1]), 'version' => preg_match('/^VERSION_ID="?([\w.]+)/m', $os, $v) ? $v[1] : ''));
+    $packages = array();
+    if (@is_readable('/var/lib/dpkg/status')) {
+        foreach (preg_split('/\n\n+/', (string) @file_get_contents('/var/lib/dpkg/status')) as $entry) {
+            if (!preg_match('/^Status: .* installed$/m', $entry) || !preg_match('/^Package: (\S+)/m', $entry, $name) || !preg_match('/^Version: (\S+)/m', $entry, $version)) {
+                continue;
+            }
+            // "Source: glibc (2.41-12)" names the source package, and its version when that differs.
+            if (preg_match('/^Source: (\S+)(?: \((\S+)\))?/m', $entry, $source)) {
+                $name[1] = $source[1];
+                $version[1] = isset($source[2]) ? $source[2] : $version[1];
+            }
+            $packages['deb ' . $name[1] . ' ' . $version[1]] = array('kind' => 'deb', 'name' => $name[1], 'version' => $version[1]);
+        }
+    } elseif (@is_readable('/lib/apk/db/installed')) {
+        foreach (preg_split('/\n\n+/', (string) @file_get_contents('/lib/apk/db/installed')) as $entry) {
+            if (preg_match('/^P:(\S+)/m', $entry, $name) && preg_match('/^V:(\S+)/m', $entry, $version)) {
+                $origin = preg_match('/^o:(\S+)/m', $entry, $o) ? $o[1] : $name[1];
+                $packages['apk ' . $origin . ' ' . $version[1]] = array('kind' => 'apk', 'name' => $origin, 'version' => $version[1]);
+            }
+        }
+    }
+    ksort($packages);
+    return array_merge($found, array_values($packages));
+}
+
 /** The list: names, versions and two settings. Nothing else is ever read. */
 function mendbird_helper_list()
 {
-    $software = array(array('kind' => 'php', 'name' => 'php', 'version' => PHP_VERSION));
+    $software = array_merge(mendbird_helper_system(), array(array('kind' => 'php', 'name' => 'php', 'version' => PHP_VERSION)));
     foreach (get_loaded_extensions() as $ext) {
         $software[] = array('kind' => 'ext', 'name' => strtolower($ext), 'version' => (string) phpversion($ext));
     }

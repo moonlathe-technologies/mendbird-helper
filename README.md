@@ -34,7 +34,9 @@ written into the workflow file.
 - **PHP:** PHP and its add-ons, the web server, Joomla or Drupal's version, every Composer package installed (from
   `vendor/composer/installed.json`, or else `composer.lock`) and the JavaScript packages in `package-lock.json`,
   leaving out packages for development only. It looks in its own folder and up to three above, and in the usual app
-  folders beside each (`app`, `etc/app`, `src`, `application`, `backend`, `laravel`, `site`, `private`). Two settings:
+  folders beside each (`app`, `etc/app`, `src`, `application`, `backend`, `laravel`, `site`, `private`). On a Debian,
+  Ubuntu or Alpine server it also sends the system and its packages, read from `/etc/os-release` and the package
+  manager's own files (it runs nothing), as the system patches the web server without changing its version. Two settings:
   whether PHP shows errors to visitors, and whether it announces its version.
 - **Linux:** the operating system and its installed packages (via `dpkg-query`, `rpm` or `apk`), and the versions of
   the web server, PHP, Node.js and the database. For each app folder you list on its `APPS` line, it reads the

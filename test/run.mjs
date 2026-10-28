@@ -153,6 +153,11 @@ async function php() {
   check(!list.software.some(s => s.name === "phpunit/phpunit"), "packages for development only are left out");
   check(list.software.some(s => s.kind === "cms" && s.name === "joomla" && s.version === "4.4.2"), "Joomla's version from its manifest");
   check(!/never-sent|APP_KEY|DB_PASSWORD/.test(body), "nothing from the .env file");
+  // Debian patches Apache without changing its headline version, so its package is what shows whether it is patched.
+  check(list.software.some(s => s.kind === "os" && s.name === "debian" && /^\d+$/.test(s.version)), "names its system, from /etc/os-release");
+  check(list.software.filter(s => s.kind === "deb").length > 20, `lists the system's packages from dpkg's status file (${list.software.filter(s => s.kind === "deb").length})`);
+  check(list.software.some(s => s.kind === "deb" && s.name === "apache2" && /^2\.4\.\d+-/.test(s.version)), "including the web server's own package, by its source name");
+  check(!list.software.some(s => s.kind === "deb" && s.name === "libapache2-mod-php"), "source packages, not each package built from them");
   const shown = compose("exec", "-T", "php", "php", "/var/www/html/mendbird-helper.php", "--show");
   check(JSON.parse(shown).helper.kind === "php", "php mendbird-helper.php --show prints the list on the server");
 }
