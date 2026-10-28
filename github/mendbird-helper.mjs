@@ -10,8 +10,8 @@
 // 2. It reads package names and versions from package-lock.json, yarn.lock, pnpm-lock.yaml, composer.lock,
 //    requirements.txt, poetry.lock, uv.lock, Pipfile.lock, Gemfile.lock, go.mod, Cargo.lock, gradle.lockfile,
 //    packages.lock.json, mix.lock and pubspec.lock, up to three folders down (leaving out test, example and docs
-//    folders), Composer's record in any vendor folder committed to the repository, and the Node.js version from .nvmrc
-//    or .node-version. Nothing else is read: not your code, not your
+//    folders), Composer's record in any vendor folder committed to the repository, the opening comment and version
+//    of script files committed by hand (such as a copy of jQuery), and the Node.js version from .nvmrc or .node-version. Nothing else is read: not your code, not your
 //    settings, not your other secrets.
 // 3. It prints the list in the Action's log, then signs it with your MENDBIRD_KEY secret and posts it to
 //    https://mendbird.com/api/helper. Mendbird refuses anything unsigned, older than five minutes, or sent twice.
@@ -19,11 +19,11 @@
 // It never changes your repository, opens no pull requests, and needs only permission to read. Delete the workflow
 // file and it stops. Licence: MIT. The code is public at https://github.com/moonlathe-technologies/mendbird-helper
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import { join } from "node:path";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const ENDPOINT = `${process.env.MENDBIRD_URL || "https://mendbird.com"}/api/helper`;
 // Folders that hold installed or built copies, or tests, examples and docs, rather than the live site's own lock files.
 const SKIP = new Set(["node_modules", "vendor", "venv", "dist", "build", "target", "out", "coverage", "test", "tests", "__tests__", "spec", "fixtures", "__fixtures__", "testdata", "example", "examples", "docs"]);
@@ -33,7 +33,7 @@ const SKIP = new Set(["node_modules", "vendor", "venv", "dist", "build", "target
 function* lockFiles(dir, depth = 0, where = "") {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name), inside = where ? `${where}/${entry.name}` : entry.name;
-    if (entry.isFile() && depth <= 3) yield [entry.name, path, where];
+    if (entry.isFile() && (depth <= 3 || entry.name.endsWith(".js"))) yield [entry.name, path, where];
     else if (entry.isDirectory() && entry.name === "vendor" && existsSync(join(path, "composer/installed.json"))) yield ["installed.json", join(path, "composer/installed.json"), where];
     else if (entry.isDirectory() && depth < 10 && !SKIP.has(entry.name) && !entry.name.startsWith(".")) yield* lockFiles(path, depth + 1, inside);
   }
@@ -84,6 +84,18 @@ const READERS = {
 };
 READERS["npm-shrinkwrap.json"] = READERS["package-lock.json"];
 const isRequirements = name => /^requirements.*\.txt$/.test(name);
+
+// A script file committed by hand, such as a copy of jQuery, which no lock file lists: its opening comment, where
+// libraries put their name and version, and the first version its code sets. Mendbird works out which library it is.
+// Only files that give a version are sent.
+function script(name, path, where) {
+  const text = readFileSync(path, "utf8");
+  const comment = text.slice(0, 1024).match(/^\s*(\/\*[\s\S]*?\*\/|(?:\/\/[^\n]*\n\s*)+)/)?.[1] ?? "";
+  const about = comment.split("\n").map(line => line.replace(/^\s*(?:\/\*+!?|\*+\/?|\/\/+!?)\s*|\s*\*+\/\s*$/g, "").trim()).filter(Boolean).join(" | ")
+    .replace(/[^\w .+:~@/\-|(),!#=<>&;']+/g, " ").trim().slice(0, 160);
+  const version = text.match(/\b(?:VERSION|version)\s*[:=]\s*["']v?(\d+\.\d+\.\d+)["']/)?.[1] ?? "";
+  return version || /\d+\.\d+/.test(about) ? { kind: "script", name, version, about, ...(where ? { where } : {}) } : null;
+}
 const requirements = text => [...text.matchAll(/^([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*==\s*([\w.!+-]+)/gm)].map(m => [python(m[1]), m[2]]);
 
 // The site's own packages are sent as they are. A set found in a folder of its own, below the nearest one of its
@@ -95,7 +107,13 @@ export function list(root = process.cwd()) {
     if (!main.has(kind) || where.split("/").length < main.get(kind).split("/").length) main.set(kind, where);
     seen.set(`${kind} ${name} ${version} ${where}`, { kind, name, version, where });
   };
+  const scripts = [];
   for (const [name, path, where] of lockFiles(root)) {
+    if (name.endsWith(".js")) {
+      const found = scripts.length < 1000 && statSync(path).size < 3e6 ? script(name, path, where) : null;
+      if (found) scripts.push(found);
+      continue;
+    }
     const [kind, read] = READERS[name] ?? (isRequirements(name) ? ["pypi", requirements] : []);
     if (read) {
       try { for (const [n, v] of read(readFileSync(path, "utf8"))) add(kind, n, v, name === "installed.json" ? where : ""); } catch { console.log(`Could not read ${path}, so it was skipped.`); }
@@ -107,7 +125,7 @@ export function list(root = process.cwd()) {
     const item = where && where !== main.get(it.kind) ? { ...it, where } : it;
     software.set(`${item.kind} ${item.name} ${item.version} ${item.where ?? ""}`, item);
   }
-  return { helper: { kind: "github", version: VERSION }, software: [...software.values()], settings: {} };
+  return { helper: { kind: "github", version: VERSION }, software: [...software.values(), ...scripts], settings: {} };
 }
 
 async function send() {

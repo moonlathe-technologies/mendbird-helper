@@ -1,5 +1,5 @@
 #!/bin/sh
-# Mendbird helper for Linux servers. Version 1.2.0.
+# Mendbird helper for Linux servers. Version 1.3.0.
 #
 # Lists the software this server runs: the operating system and its installed packages, the web server, PHP, Node.js
 # and the database, with their exact versions. Once a day it sends that list to Mendbird, which checks every version
@@ -10,7 +10,8 @@
 # 1. It reads package names and versions with the system's own tools (dpkg-query, rpm or apk), and asks the web
 #    server, PHP, Node.js and the database for their version numbers. If you list your apps below, it also reads the
 #    names and versions of the packages each one is built from, including any second set a bundled tool carries in a
-#    folder of its own. Nothing else is read, and nothing in your apps is run.
+#    folder of its own, and the opening comment of script files copied in by hand (such as a copy of jQuery). Nothing
+#    else is read, and nothing in your apps is run.
 # 2. It signs the list with the secret key below and posts it to https://mendbird.com/api/helper. Mendbird refuses
 #    anything unsigned, older than five minutes, or sent twice.
 # 3. It opens no port, takes no instructions, and needs no root: any user can run it.
@@ -36,7 +37,7 @@ umask 077
 # Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
 KEY='__MENDBIRD_KEY__'
 SITE='__MENDBIRD_SITE__'
-VERSION='1.2.0'
+VERSION='1.3.0'
 
 # Your own apps, if this server runs any: Python, Node.js, PHP, Ruby, Rust or Go. Put each app's folder here, separated
 # by spaces, or the path of a Go program. For example: APPS='/srv/shop /srv/api/bin/server'
@@ -146,6 +147,27 @@ app_php() {
 	done
 	return 0
 }
+# Script libraries copied into an app by hand, which no package record lists: each file's opening comment, where
+# libraries put their name and version, and the first version its code sets. Mendbird works out which library it is.
+# Only files that give a version are sent, at most 1,000.
+app_scripts() {
+	find "$1" -maxdepth 10 -type d \( -name .git -o -name node_modules -o -name vendor -o -name cache -o -name tmp -o -name logs -o -name uploads -o -name images -o -name storage \) -prune \
+		-o -type f -name '*.js' -size -3000k -print 2>/dev/null | head -n 1000 | while read -r file; do
+		about=$(head -c 1024 "$file" | awk '
+			NR == 1 { sub(/^[ \t]+/, "") }
+			!started && /^[ \t]*$/ { next }
+			!started { if ($0 ~ /^[ \t]*\/\*/) style = "block"; else if ($0 ~ /^[ \t]*\/\//) style = "line"; else exit; started = 1 }
+			style == "line" && $0 !~ /^[ \t]*\/\// { exit }
+			{ done = style == "block" && /\*\// ; line = $0; gsub(/^[ \t]*(\/\*+!?|\*+\/?|\/\/+!?)[ \t]*|[ \t]*\*+\/.*$/, "", line); if (line != "") out = out (out == "" ? "" : " | ") line; if (done) exit }
+			END { print out }' | tr -c "A-Za-z0-9_ .+:~@/|(),!#=<>&;'\n-" ' ' | sed 's/  */ /g; s/^ //; s/ $//' | cut -c1-160)
+		version=$(grep -o -m 1 -E "(VERSION|version)[[:space:]]*[:=][[:space:]]*[\"']v?[0-9]+\.[0-9]+\.[0-9]+[\"']" "$file" 2>/dev/null | head -n 1 | grep -o -E '[0-9]+\.[0-9]+\.[0-9]+' || true)
+		[ -n "$version" ] || printf '%s' "$about" | grep -q -E '[0-9]+\.[0-9]+' || continue
+		where=${file%/*}; where=${where#"$1"}; where=$(printf '%s' "${where#/}" | clean)
+		printf ',{"kind":"script","name":"%s","version":"%s","about":"%s"' "$(printf '%s' "${file##*/}" | clean)" "$version" "$about"
+		[ -n "$where" ] && printf ',"where":"%s"' "$where"
+		printf '}'
+	done
+}
 app_go_program() {
 	# A Go program carries the list of modules it was built from, and its Go version, as plain text between zero bytes.
 	# Only that text is read; the program is never run.
@@ -160,6 +182,7 @@ app() {
 	app_python "$1"
 	app_node "$1"
 	app_php "$1"
+	app_scripts "$1"
 	[ -r "$1/Gemfile.lock" ] && sed -n 's/^    \([A-Za-z0-9._-]*\) (\([^)[:space:]-]*\).*/\1 \2/p' "$1/Gemfile.lock" | entries gem
 	[ -r "$1/Cargo.lock" ] && awk '/^\[\[package\]\]/ { n = "" } /^name = / { gsub(/"/, "", $3); n = $3 } /^version = / { gsub(/"/, "", $3); if (n != "") print n, $3; n = "" }' "$1/Cargo.lock" | entries cargo
 	[ -r "$1/go.mod" ] && awk '$1 == "require" && $3 ~ /^v/ { print $2, $3 } /^\t/ && $2 ~ /^v/ && $1 ~ /\./ { print $1, $2 }' "$1/go.mod" | entries go

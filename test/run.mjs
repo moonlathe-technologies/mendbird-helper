@@ -24,11 +24,11 @@ let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
 
 // What a helper may ever send, from docs/helper-design.md.
-const KINDS = new Set(["cms", "plugin", "theme", "php", "ext", "db", "server", "node", "composer", "npm", "pypi", "gem", "go", "cargo", "maven", "nuget", "hex", "pub", "os", "deb", "rpm", "apk"]);
+const KINDS = new Set(["cms", "plugin", "theme", "php", "ext", "db", "server", "node", "composer", "npm", "pypi", "gem", "go", "cargo", "maven", "nuget", "hex", "pub", "os", "deb", "rpm", "apk", "script"]);
 const SETTINGS = new Set(["debug_on", "dashboard_code_editor", "plugin_auto_updates", "php_version_announced", "admins"]);
 function onlyAllowed(list) {
   const top = Object.keys(list).every(k => ["helper", "software", "settings"].includes(k));
-  const items = list.software.every(it => KINDS.has(it.kind) && Object.keys(it).every(k => ["kind", "name", "version", "active", "where"].includes(k)));
+  const items = list.software.every(it => KINDS.has(it.kind) && Object.keys(it).every(k => ["kind", "name", "version", "active", "where", "about"].includes(k)));
   const settings = Object.entries(list.settings).every(([k, v]) => SETTINGS.has(k) && (typeof v === "boolean" || Number.isInteger(v)));
   return top && items && settings;
 }
@@ -153,6 +153,7 @@ async function php() {
   check(list.software.some(s => s.name === "monolog/monolog" && s.version === "3.7.0"), "a leading v is dropped from versions");
   check(list.software.some(s => s.name === "guzzlehttp/guzzle" && s.version === "6.5.5" && s.where === "html/files/ckfinder/core/connector/php"), "a bundled tool's own packages, with their folder");
   check(list.software.some(s => s.name === "guzzlehttp/guzzle" && s.version === "7.4.0" && !s.where), "the site's own packages, with no folder");
+  check(list.software.some(s => s.kind === "script" && s.name === "jquery.min.js" && /^jQuery v3\.4\.1/.test(s.about) && s.where === "html/js"), "a script copied in by hand, with its opening comment and folder");
   check(!list.software.some(s => s.name === "phpunit/phpunit"), "packages for development only are left out");
   check(list.software.some(s => s.kind === "cms" && s.name === "joomla" && s.version === "4.4.2"), "Joomla's version from its manifest");
   check(!/never-sent|APP_KEY|DB_PASSWORD/.test(body), "nothing from the .env file");
@@ -174,6 +175,8 @@ async function laravel() {
     ["composer create-project -q --no-interaction laravel/laravel /app", "cd /app", "composer config repositories.mendbird path /pkg", "composer require -q --no-interaction mendbird/helper:@dev",
       // A file browser bundled in public with its own, older packages, as CKFinder is on GardenSite.
       `mkdir -p public/files/ckfinder/vendor/composer && echo '{"packages":[{"name":"guzzlehttp/guzzle","version":"6.5.5"}]}' > public/files/ckfinder/vendor/composer/installed.json`,
+      // And a copy of jQuery dropped into public by hand, which no package record lists.
+      `mkdir -p public/js && printf '/*! jQuery v3.4.1 | (c) JS Foundation */\\n!function(){}' > public/js/jquery.min.js`,
       `printf 'MENDBIRD_KEY=${KEY}\\nMENDBIRD_HOST=${HOST}\\n' >> .env`, "php artisan config:cache", "php artisan route:cache", "php artisan serve --host=0.0.0.0 --port=8000"].join(" && ")]);
   try {
     const url = "http://localhost:8084/mendbird-helper";
@@ -192,6 +195,7 @@ async function laravel() {
     check(!list.software.some(s => s.name === "phpunit/phpunit"), "packages for development only are left out");
     check(list.software.some(s => s.kind === "composer" && s.name === "guzzlehttp/guzzle" && s.version === "6.5.5" && s.where === "public/files/ckfinder"), "a bundled tool's own packages, with their folder");
     check(list.software.some(s => s.kind === "composer" && s.name === "laravel/framework" && !s.where), "the app's own packages, with no folder");
+    check(list.software.some(s => s.kind === "script" && s.name === "jquery.min.js" && /^jQuery v3\.4\.1/.test(s.about) && s.where === "public/js"), "a script copied in by hand, with its opening comment and folder");
     check(list.software.some(s => s.kind === "os" && s.name === "alpine") && list.software.filter(s => s.kind === "apk").length > 10, `names its system and lists its apk packages (${list.software.filter(s => s.kind === "apk").length})`);
     check(list.settings.debug_on === true, "a new app's debug mode is seen as on");
     check(!/APP_KEY|base64:|DB_PASSWORD/.test(body), "nothing from the .env file");
@@ -267,6 +271,9 @@ async function apps() {
     check(has("composer", "laravel/framework", "10.0.0") && !shown.software.some(s => s.name === "phpunit/phpunit"), "PHP: Composer's installed packages, without those for development");
     check(shown.software.some(s => s.kind === "composer" && s.name === "guzzlehttp/guzzle" && s.version === "6.5.5" && s.where === "public/files/ckfinder"), "PHP: a bundled tool's own packages, with their folder");
     check(shown.software.some(s => s.kind === "composer" && s.name === "laravel/framework" && !s.where), "PHP: the app's own packages, with no folder");
+    check(shown.software.some(s => s.kind === "script" && s.name === "jquery.min.js" && /^jQuery v3\.4\.1 \| \(c\) JS Foundation/.test(s.about) && s.where === "public/js")
+      && shown.software.some(s => s.kind === "script" && s.name === "moment.js" && s.version === "2.24.0" && s.about === "moment.js")
+      && !shown.software.some(s => s.kind === "script" && s.name === "app.js"), "scripts copied in by hand: opening comment, version from the code, and the app's own code left out");
     check(has("gem", "actionpack", "6.0.0") && has("cargo", "tokio", "1.0.0"), "Ruby and Rust lock files");
     check(has("go", "golang.org/x/text", "v0.3.7") && shown.software.some(s => s.kind === "go" && s.name === "stdlib" && /^1\.22\./.test(s.version)), "Go: the modules and Go version inside the program, without running it");
     check(!/never-sent/.test(JSON.stringify(shown)), "nothing from .env");

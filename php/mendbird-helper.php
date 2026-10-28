@@ -1,12 +1,13 @@
 <?php
 /**
- * Mendbird helper for PHP sites: Joomla, Drupal, Laravel and hand built. Version 1.3.0.
+ * Mendbird helper for PHP sites: Joomla, Drupal, Laravel and hand built. Version 1.4.0.
  *
  * Put this one file in your site's public folder. It lets Mendbird read the exact version of PHP and its add-ons,
  * Joomla or Drupal if it finds them, every Composer package the site has installed, the JavaScript packages in its
  * package-lock.json, and the server's system packages, so it can check each one against the lists of known security
  * flaws every morning. It searches the whole site, from the top of the project this folder belongs to, so a second
- * set of packages inside a bundled tool is checked too.
+ * set of packages inside a bundled tool is checked too, and so are script libraries copied in by hand, such as a copy
+ * of jQuery: for those it sends each file's opening comment and the version its code sets.
  *
  * How it works, in full, because you should be able to check:
  *
@@ -28,7 +29,7 @@
 // Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
 const MENDBIRD_HELPER_KEY = '__MENDBIRD_KEY__';
 const MENDBIRD_HELPER_HOST = '__MENDBIRD_HOST__';
-const MENDBIRD_HELPER_VERSION = '1.3.0';
+const MENDBIRD_HELPER_VERSION = '1.4.0';
 
 /**
  * The first of these folders that holds the named file: this one, then up to three above it, and beside each of those
@@ -83,11 +84,35 @@ function mendbird_helper_root()
 }
 
 /**
+ * A script file's own description of itself: its opening comment, where libraries put their name and version, and
+ * the first version number the code sets, for those that only say it there. Mendbird works out which library it is.
+ * Only files that give a version are sent.
+ */
+function mendbird_helper_script($path, $where)
+{
+    $size = (int) @filesize($path);
+    $text = $size > 0 && $size < 3000000 ? (string) @file_get_contents($path) : '';
+    $about = '';
+    if (preg_match('~^\s*(/\*.*?\*/|(?://[^\n]*\n\s*)+)~s', substr($text, 0, 1024), $m)) {
+        $lines = array_filter(array_map(function ($line) {
+            return trim(preg_replace('~^\s*(?:/\*+!?|\*+/?|//+!?)\s*|\s*\*+/\s*$~', '', $line));
+        }, explode("\n", $m[1])), 'strlen');
+        $about = substr(trim(preg_replace('/[^\w .+:~@\/\-|(),!#=<>&;\']+/', ' ', implode(' | ', $lines))), 0, 160);
+    }
+    $version = preg_match('/\b(?:VERSION|version)\s*[:=]\s*["\']v?(\d+\.\d+\.\d+)["\']/', $text, $v) ? $v[1] : '';
+    if ($version === '' && !preg_match('/\d+\.\d+/', $about)) {
+        return null;
+    }
+    $script = array('kind' => 'script', 'name' => basename($path), 'version' => $version, 'about' => $about);
+    return $where === '' ? $script : $script + array('where' => $where);
+}
+
+/**
  * Every folder under the top of the site that keeps a record of the packages in it, nearest first. Sites often carry
  * a second set inside a bundled tool (a file browser, an old editor) that is never updated with the rest, so all are
  * read. Links are not followed, and the search stops after 20,000 folders or 10 levels.
  */
-function mendbird_helper_folders($root)
+function mendbird_helper_folders($root, &$scripts = array())
 {
     $found = array();
     $queue = array(array($root, 0));
@@ -102,8 +127,18 @@ function mendbird_helper_folders($root)
         $names = $depth < 10 ? @scandir($dir) : false;
         foreach ($names ? $names : array() as $name) {
             $path = $dir . '/' . $name;
-            if ($name !== '.' && $name !== '..' && !in_array(strtolower($name), MENDBIRD_HELPER_SKIP, true) && is_dir($path) && !is_link($path)) {
+            if ($name === '.' || $name === '..' || is_link($path)) {
+                continue;
+            }
+            if (is_dir($path) && !in_array(strtolower($name), MENDBIRD_HELPER_SKIP, true)) {
                 $queue[] = array($path, $depth + 1);
+            } elseif (count($scripts) < 1000 && substr($name, -3) === '.js' && is_file($path)) {
+                // Script libraries copied into the site by hand, which no package record lists. The same file in
+                // several folders is sent once a folder.
+                $script = mendbird_helper_script($path, ltrim(substr($dir, strlen($root)), '/'));
+                if ($script) {
+                    $scripts[$script['name'] . ' ' . $script['version'] . ' ' . $script['about'] . ' ' . (isset($script['where']) ? $script['where'] : '')] = $script;
+                }
             }
         }
     }
@@ -171,7 +206,8 @@ function mendbird_helper_packages()
     $root = mendbird_helper_root();
     $found = array();
     $main = array();
-    foreach (mendbird_helper_folders($root) as $dir) {
+    $scripts = array();
+    foreach (mendbird_helper_folders($root, $scripts) as $dir) {
         $where = ltrim(substr($dir, strlen($root)), '/');
         foreach (array_merge(mendbird_helper_composer($dir), mendbird_helper_npm($dir)) as $p) {
             $main += array($p['kind'] => $where);
@@ -181,7 +217,7 @@ function mendbird_helper_packages()
             $found[$p['kind'] . ' ' . $p['name'] . ' ' . $p['version'] . ' ' . (isset($p['where']) ? $p['where'] : '')] = $p;
         }
     }
-    return array_values($found);
+    return array_merge(array_values($found), array_values($scripts));
 }
 
 /**

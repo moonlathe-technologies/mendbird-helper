@@ -64,6 +64,14 @@ written into the workflow file.
 A package found in a second set, away from the site's main one, carries the folder it is in (`"where"`), so the
 report can say which copy needs updating.
 
+The PHP, Laravel, Linux (for each app) and GitHub helpers also look at script files copied into the site by hand, such
+as a copy of jQuery in a `javascripts` folder, which no package record lists. For each `.js` file that gives a version
+they send its name, its opening comment (where libraries put their name and version) and the first version its code
+sets (`"kind": "script"`, with `"about"` and `"where"`), at most 1,000 files. Mendbird works out which library each
+one is and checks it like any other script. A file only matters if a page loads it, which the file cannot show, so
+the report keeps these at minor unless the page visitors see loads that same version. The WordPress plugin leaves
+scripts to each plugin's and theme's own security notices.
+
 None of them read content, customer or user details, passwords, keys, `wp-config.php`, `.env`, logs or your code.
 
 ## How messages are signed

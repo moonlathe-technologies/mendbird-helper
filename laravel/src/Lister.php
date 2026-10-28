@@ -5,7 +5,7 @@ namespace Mendbird\Helper;
 /** The list: names, versions and two settings. Nothing else is ever read. */
 final class Lister
 {
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.2.0';
 
     // Folders that hold no code of their own, or whose packages are read from the record beside them.
     private const SKIP = ['.git', '.svn', 'node_modules', 'vendor', 'bower_components', 'cache', 'caches', 'tmp', 'temp',
@@ -41,6 +41,7 @@ final class Lister
     private static function packages(string $base): array
     {
         $found = [];
+        $scripts = [];
         $queue = [[$base, 0]];
         for ($seen = 0; $queue && $seen < 20000; $seen++) {
             [$dir, $depth] = array_shift($queue);
@@ -51,12 +52,39 @@ final class Lister
             }
             foreach ($depth < 10 ? (@scandir($dir) ?: []) : [] as $name) {
                 $path = $dir . '/' . $name;
-                if ($name !== '.' && $name !== '..' && !in_array(strtolower($name), self::SKIP, true) && is_dir($path) && !is_link($path)) {
+                if ($name === '.' || $name === '..' || is_link($path)) {
+                    continue;
+                }
+                if (is_dir($path) && !in_array(strtolower($name), self::SKIP, true)) {
                     $queue[] = [$path, $depth + 1];
+                } elseif (count($scripts) < 1000 && str_ends_with($name, '.js') && is_file($path) && ($script = self::script($path, $where))) {
+                    // Script libraries copied into the app by hand, which no package record lists.
+                    $scripts[] = $script;
                 }
             }
         }
-        return array_values($found);
+        return [...array_values($found), ...$scripts];
+    }
+
+    /**
+     * A script file's own description of itself: its opening comment, where libraries put their name and version, and
+     * the first version number its code sets. Mendbird works out which library it is. Only files that give a version
+     * are sent.
+     */
+    private static function script(string $path, string $where): ?array
+    {
+        $size = (int) @filesize($path);
+        $text = $size > 0 && $size < 3000000 ? (string) @file_get_contents($path) : '';
+        $about = '';
+        if (preg_match('~^\s*(/\*.*?\*/|(?://[^\n]*\n\s*)+)~s', substr($text, 0, 1024), $m)) {
+            $lines = array_filter(array_map(fn ($line) => trim(preg_replace('~^\s*(?:/\*+!?|\*+/?|//+!?)\s*|\s*\*+/\s*$~', '', $line)), explode("\n", $m[1])), 'strlen');
+            $about = substr(trim(preg_replace('/[^\w .+:~@\/\-|(),!#=<>&;\']+/', ' ', implode(' | ', $lines))), 0, 160);
+        }
+        $version = preg_match('/\b(?:VERSION|version)\s*[:=]\s*["\']v?(\d+\.\d+\.\d+)["\']/', $text, $v) ? $v[1] : '';
+        if ($version === '' && !preg_match('/\d+\.\d+/', $about)) {
+            return null;
+        }
+        return ['kind' => 'script', 'name' => basename($path), 'version' => $version, 'about' => $about] + ($where === '' ? [] : ['where' => $where]);
     }
 
     /** A JSON file as an array, or an empty one if it is missing or not JSON. */
