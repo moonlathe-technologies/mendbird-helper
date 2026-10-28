@@ -1,7 +1,7 @@
 # Mendbird helper for Laravel
 
-Lets [Mendbird](https://mendbird.com) read the exact version of PHP, Laravel and every Composer package your app
-runs, so it can check each one against the public lists of known security flaws every morning.
+Lets [Mendbird](https://mendbird.com) read the exact version of PHP, Laravel, every package your app runs and the
+server's system packages, so it can check each one against the public lists of known security flaws every morning.
 
 It reads names and version numbers, nothing else. It answers only Mendbird, takes no instructions, and never changes
 anything. This is all of its code, so you can check that for yourself before you install it.
@@ -33,9 +33,11 @@ php artisan mendbird:show
    from your key. The request carries nothing else: no commands, no settings, no code.
 2. If the signature is right and the time is within five minutes, the helper replies with the list, signed with the
    same key so Mendbird knows it was not changed on the way. To anyone else it says `Not found`.
-3. The list is PHP and its add-ons, the web server, and the packages in `vendor/composer/installed.json` (leaving
-   out packages for development only), plus two settings: whether Laravel's debug mode is on, and whether PHP
-   announces its version.
+3. The list is PHP and its add-ons, the web server, the packages in `vendor/composer/installed.json` and
+   `package-lock.json` (leaving out packages for development only), any second set a bundled tool carries in a folder
+   of its own inside the app (named by its folder), and the server's system and its packages, read from
+   `/etc/os-release` and the package manager's own files with nothing run. Plus two settings: whether Laravel's debug
+   mode is on, and whether PHP announces its version.
 
 The address is added with no middleware, so it sets no cookies and starts no session. Of your settings it reads its
 own two lines and whether debug mode is on, nothing more. It never reads your database, your content or anyone's

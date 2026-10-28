@@ -10,7 +10,8 @@
 // 2. It reads package names and versions from package-lock.json, yarn.lock, pnpm-lock.yaml, composer.lock,
 //    requirements.txt, poetry.lock, uv.lock, Pipfile.lock, Gemfile.lock, go.mod, Cargo.lock, gradle.lockfile,
 //    packages.lock.json, mix.lock and pubspec.lock, up to three folders down (leaving out test, example and docs
-//    folders), and the Node.js version from .nvmrc or .node-version. Nothing else is read: not your code, not your
+//    folders), Composer's record in any vendor folder committed to the repository, and the Node.js version from .nvmrc
+//    or .node-version. Nothing else is read: not your code, not your
 //    settings, not your other secrets.
 // 3. It prints the list in the Action's log, then signs it with your MENDBIRD_KEY secret and posts it to
 //    https://mendbird.com/api/helper. Mendbird refuses anything unsigned, older than five minutes, or sent twice.
@@ -18,19 +19,23 @@
 // It never changes your repository, opens no pull requests, and needs only permission to read. Delete the workflow
 // file and it stops. Licence: MIT. The code is public at https://github.com/moonlathe-technologies/mendbird-helper
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import { join } from "node:path";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const ENDPOINT = `${process.env.MENDBIRD_URL || "https://mendbird.com"}/api/helper`;
 // Folders that hold installed or built copies, or tests, examples and docs, rather than the live site's own lock files.
 const SKIP = new Set(["node_modules", "vendor", "venv", "dist", "build", "target", "out", "coverage", "test", "tests", "__tests__", "spec", "fixtures", "__fixtures__", "testdata", "example", "examples", "docs"]);
 
-function* lockFiles(dir, depth = 0) {
+// Lock files are read up to three folders down. A vendor folder committed to the repository, as a file browser or old
+// editor often brings its own, is read wherever it is, up to ten down, from Composer's record of what it installed.
+function* lockFiles(dir, depth = 0, where = "") {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isFile()) yield [entry.name, join(dir, entry.name)];
-    else if (entry.isDirectory() && depth < 3 && !SKIP.has(entry.name) && !entry.name.startsWith(".")) yield* lockFiles(join(dir, entry.name), depth + 1);
+    const path = join(dir, entry.name), inside = where ? `${where}/${entry.name}` : entry.name;
+    if (entry.isFile() && depth <= 3) yield [entry.name, path, where];
+    else if (entry.isDirectory() && entry.name === "vendor" && existsSync(join(path, "composer/installed.json"))) yield ["installed.json", join(path, "composer/installed.json"), where];
+    else if (entry.isDirectory() && depth < 10 && !SKIP.has(entry.name) && !entry.name.startsWith(".")) yield* lockFiles(path, depth + 1, inside);
   }
 }
 
@@ -54,6 +59,11 @@ const READERS = {
   })],
   "pnpm-lock.yaml": ["npm", text => [...text.matchAll(/^ {2}'?\/?((?:@[^@/\s]+\/)?[^@/\s']+)[@/](\d[^(:'\s]*)/gm)].map(m => [m[1], m[2]])],
   "composer.lock": ["composer", text => (JSON.parse(text).packages ?? []).map(p => [p.name, String(p.version).replace(/^v/, "")])],
+  // Composer's record of what it installed: Composer 2 wraps the list and names the packages for development only.
+  "installed.json": ["composer", text => {
+    const data = JSON.parse(text), dev = new Set(data["dev-package-names"] ?? []);
+    return (Array.isArray(data) ? data : data.packages ?? []).filter(p => !dev.has(p.name)).map(p => [p.name, String(p.version).replace(/^v/, "")]);
+  }],
   "poetry.lock": ["pypi", text => tomlPackages(text).map(([n, v]) => [python(n), v])],
   "uv.lock": ["pypi", text => tomlPackages(text).map(([n, v]) => [python(n), v])],
   "Pipfile.lock": ["pypi", text => Object.entries(JSON.parse(text).default ?? {}).map(([n, p]) => [python(n), String(p.version ?? "").replace(/^==/, "")])],
@@ -76,19 +86,28 @@ READERS["npm-shrinkwrap.json"] = READERS["package-lock.json"];
 const isRequirements = name => /^requirements.*\.txt$/.test(name);
 const requirements = text => [...text.matchAll(/^([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*==\s*([\w.!+-]+)/gm)].map(m => [python(m[1]), m[2]]);
 
+// The site's own packages are sent as they are. A set found in a folder of its own, below the nearest one of its
+// kind, says which folder, so the report can point to it.
 export function list(root = process.cwd()) {
-  const seen = new Map();
-  const add = (kind, name, version) => {
-    if (name && version) seen.set(`${kind} ${name} ${version}`, { kind, name, version });
+  const seen = new Map(), main = new Map();
+  const add = (kind, name, version, where = "") => {
+    if (!name || !version) return;
+    if (!main.has(kind) || where.split("/").length < main.get(kind).split("/").length) main.set(kind, where);
+    seen.set(`${kind} ${name} ${version} ${where}`, { kind, name, version, where });
   };
-  for (const [name, path] of lockFiles(root)) {
+  for (const [name, path, where] of lockFiles(root)) {
     const [kind, read] = READERS[name] ?? (isRequirements(name) ? ["pypi", requirements] : []);
     if (read) {
-      try { for (const [n, v] of read(readFileSync(path, "utf8"))) add(kind, n, v); } catch { console.log(`Could not read ${path}, so it was skipped.`); }
+      try { for (const [n, v] of read(readFileSync(path, "utf8"))) add(kind, n, v, name === "installed.json" ? where : ""); } catch { console.log(`Could not read ${path}, so it was skipped.`); }
     }
     if (name === ".nvmrc" || name === ".node-version") add("node", "node", readFileSync(path, "utf8").trim().replace(/^v/, "").match(/^\d+(\.\d+){0,2}$/)?.[0]);
   }
-  return { helper: { kind: "github", version: VERSION }, software: [...seen.values()], settings: {} };
+  const software = new Map();
+  for (const { where, ...it } of seen.values()) {
+    const item = where && where !== main.get(it.kind) ? { ...it, where } : it;
+    software.set(`${item.kind} ${item.name} ${item.version} ${item.where ?? ""}`, item);
+  }
+  return { helper: { kind: "github", version: VERSION }, software: [...software.values()], settings: {} };
 }
 
 async function send() {

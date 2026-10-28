@@ -1,6 +1,6 @@
 {
     "name": "mendbird/helper",
-    "description": "Lets Mendbird read the exact version of PHP, Laravel and every Composer package your app runs, so it can check each one against the lists of known security flaws every morning. Reads names and versions only, and answers only Mendbird.",
+    "description": "Lets Mendbird read the exact version of PHP, Laravel, every package your app runs and the server's system packages, so it can check each one against the lists of known security flaws every morning. Reads names and versions only, and answers only Mendbird.",
     "type": "library",
     "license": "MIT",
     "homepage": "https://mendbird.com/helper",

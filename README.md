@@ -25,16 +25,22 @@ written into the workflow file.
 ## What each one reads
 
 - **WordPress:** WordPress, every plugin and theme with its version and whether it is switched on, PHP and its
-  add-ons, the database and the web server. Five settings: whether debug mode shows errors to visitors, whether admins
+  add-ons, the database and the web server, and on a Debian, Ubuntu or Alpine server the system and its packages,
+  read from `/etc/os-release` and the package manager's own files (it runs nothing). Libraries a plugin bundles are
+  left to the plugin's own security notices, as updating the plugin is what fixes them. Five settings: whether debug mode shows errors to visitors, whether admins
   can edit code from the dashboard, whether plugins update themselves, whether PHP announces its version, and how many
   admin accounts there are (a number, never names).
-- **Laravel:** PHP and its add-ons, the web server, and the packages in `vendor/composer/installed.json` (Laravel
-  itself among them, leaving out packages for development only). Two settings: whether Laravel's debug mode is on,
+- **Laravel:** PHP and its add-ons, the web server, the packages in `vendor/composer/installed.json` (Laravel itself
+  among them, leaving out packages for development only) and in `package-lock.json`, any second set a bundled tool
+  carries in a folder of its own inside the app (named by its folder), and the system and its packages, as for PHP.
+  Two settings: whether Laravel's debug mode is on,
   and whether PHP announces its version.
 - **PHP:** PHP and its add-ons, the web server, Joomla or Drupal's version, every Composer package installed (from
   `vendor/composer/installed.json`, or else `composer.lock`) and the JavaScript packages in `package-lock.json`,
-  leaving out packages for development only. It looks in its own folder and up to three above, and in the usual app
-  folders beside each (`app`, `etc/app`, `src`, `application`, `backend`, `laravel`, `site`, `private`). On a Debian,
+  leaving out packages for development only. It searches the whole project its folder belongs to (found by looking up
+  to three folders above, and in the usual app folders beside each: `app`, `etc/app`, `src` and so on), so a second
+  set inside a bundled tool, such as a file browser with its own `vendor` folder, is sent too, named by its folder.
+  It skips uploads, caches, logs and version control, follows no links, and stops after 20,000 folders. On a Debian,
   Ubuntu or Alpine server it also sends the system and its packages, read from `/etc/os-release` and the package
   manager's own files (it runs nothing), as the system patches the web server without changing its version. Two settings:
   whether PHP shows errors to visitors, and whether it announces its version.
@@ -43,15 +49,20 @@ written into the workflow file.
   packages the app is built from, only ever reading files, never running anything in the app:
   - Python: the package folders in `venv`, `.venv` or `env` (`name-version.dist-info`), or else pinned
     `requirements*.txt`;
-  - Node.js: `node_modules/*/package.json`;
-  - PHP: `vendor/composer/installed.json`, without packages for development only;
+  - Node.js: `node_modules/*/package.json`, in the app's own `node_modules` and any deeper one;
+  - PHP: `vendor/composer/installed.json` in the app's own `vendor` and any deeper one a bundled tool brings, without
+    packages for development only;
   - Ruby and Rust: `Gemfile.lock` and `Cargo.lock`;
   - Go: `go.mod`, and the module list every Go program carries inside it as plain text, plus its Go version.
 - **GitHub:** the packages in `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `composer.lock`, `requirements*.txt`,
   `poetry.lock`, `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `go.mod`, `Cargo.lock`, `gradle.lockfile`,
-  `packages.lock.json`, `mix.lock` and `pubspec.lock`, and the Node.js version in `.nvmrc` or `.node-version`. It
+  `packages.lock.json`, `mix.lock` and `pubspec.lock`, Composer's record in any `vendor` folder committed to the
+  repository, and the Node.js version in `.nvmrc` or `.node-version`. It
   leaves out packages for development only where the file says which they are, and folders of tests, examples and
   docs.
+
+A package found in a second set, away from the site's main one, carries the folder it is in (`"where"`), so the
+report can say which copy needs updating.
 
 None of them read content, customer or user details, passwords, keys, `wp-config.php`, `.env`, logs or your code.
 

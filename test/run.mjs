@@ -28,7 +28,7 @@ const KINDS = new Set(["cms", "plugin", "theme", "php", "ext", "db", "server", "
 const SETTINGS = new Set(["debug_on", "dashboard_code_editor", "plugin_auto_updates", "php_version_announced", "admins"]);
 function onlyAllowed(list) {
   const top = Object.keys(list).every(k => ["helper", "software", "settings"].includes(k));
-  const items = list.software.every(it => KINDS.has(it.kind) && Object.keys(it).every(k => ["kind", "name", "version", "active"].includes(k)));
+  const items = list.software.every(it => KINDS.has(it.kind) && Object.keys(it).every(k => ["kind", "name", "version", "active", "where"].includes(k)));
   const settings = Object.entries(list.settings).every(([k, v]) => SETTINGS.has(k) && (typeof v === "boolean" || Number.isInteger(v)));
   return top && items && settings;
 }
@@ -84,6 +84,7 @@ async function wordpress() {
   check(list.software.some(s => s.kind === "theme" && s.active === true), "themes");
   check(list.software.some(s => s.kind === "db" && s.name === "mariadb"), "the database");
   check(list.software.some(s => s.kind === "php") && list.software.some(s => s.kind === "server" && s.name === "apache"), "PHP and the web server");
+  check(list.software.some(s => s.kind === "os" && s.name === "debian") && list.software.some(s => s.kind === "deb" && s.name === "apache2"), "the system and its packages, Apache's own among them");
   check(list.settings.debug_on === true && list.settings.admins === 1, `settings: debug mode on, one admin, counted not named ${JSON.stringify(list.settings)}`);
   check(!/private|owner|customer|test-only|@example/i.test(body), "no names, emails, posts or passwords anywhere in it");
   check(!(await ask(url, { time })).body.includes('"software"'), "the same signed request a second time: the normal page");
@@ -150,6 +151,8 @@ async function php() {
   check(onlyAllowed(list), "the list holds only the agreed fields");
   check(list.software.some(s => s.kind === "composer" && s.name === "guzzlehttp/guzzle" && s.version === "7.4.0"), "packages from composer.lock, one folder above");
   check(list.software.some(s => s.name === "monolog/monolog" && s.version === "3.7.0"), "a leading v is dropped from versions");
+  check(list.software.some(s => s.name === "guzzlehttp/guzzle" && s.version === "6.5.5" && s.where === "html/files/ckfinder/core/connector/php"), "a bundled tool's own packages, with their folder");
+  check(list.software.some(s => s.name === "guzzlehttp/guzzle" && s.version === "7.4.0" && !s.where), "the site's own packages, with no folder");
   check(!list.software.some(s => s.name === "phpunit/phpunit"), "packages for development only are left out");
   check(list.software.some(s => s.kind === "cms" && s.name === "joomla" && s.version === "4.4.2"), "Joomla's version from its manifest");
   check(!/never-sent|APP_KEY|DB_PASSWORD/.test(body), "nothing from the .env file");
@@ -169,6 +172,8 @@ async function laravel() {
   sh("docker", ["rm", "-f", name]);
   sh("docker", ["run", "-d", "--name", name, "-p", "8084:8000", "-v", `${here}../laravel:/pkg:ro`, "composer:2", "sh", "-c",
     ["composer create-project -q --no-interaction laravel/laravel /app", "cd /app", "composer config repositories.mendbird path /pkg", "composer require -q --no-interaction mendbird/helper:@dev",
+      // A file browser bundled in public with its own, older packages, as CKFinder is on GardenSite.
+      `mkdir -p public/files/ckfinder/vendor/composer && echo '{"packages":[{"name":"guzzlehttp/guzzle","version":"6.5.5"}]}' > public/files/ckfinder/vendor/composer/installed.json`,
       `printf 'MENDBIRD_KEY=${KEY}\\nMENDBIRD_HOST=${HOST}\\n' >> .env`, "php artisan config:cache", "php artisan route:cache", "php artisan serve --host=0.0.0.0 --port=8000"].join(" && ")]);
   try {
     const url = "http://localhost:8084/mendbird-helper";
@@ -185,6 +190,9 @@ async function laravel() {
     check(onlyAllowed(list) && list.helper.kind === "laravel", "the list holds only the agreed fields");
     check(list.software.some(s => s.kind === "composer" && s.name === "laravel/framework" && /^\d+\.\d+/.test(s.version)), "Laravel's own version, from Composer's record");
     check(!list.software.some(s => s.name === "phpunit/phpunit"), "packages for development only are left out");
+    check(list.software.some(s => s.kind === "composer" && s.name === "guzzlehttp/guzzle" && s.version === "6.5.5" && s.where === "public/files/ckfinder"), "a bundled tool's own packages, with their folder");
+    check(list.software.some(s => s.kind === "composer" && s.name === "laravel/framework" && !s.where), "the app's own packages, with no folder");
+    check(list.software.some(s => s.kind === "os" && s.name === "alpine") && list.software.filter(s => s.kind === "apk").length > 10, `names its system and lists its apk packages (${list.software.filter(s => s.kind === "apk").length})`);
     check(list.settings.debug_on === true, "a new app's debug mode is seen as on");
     check(!/APP_KEY|base64:|DB_PASSWORD/.test(body), "nothing from the .env file");
     const shown = sh("docker", ["exec", "-w", "/app", name, "php", "artisan", "mendbird:show"]);
@@ -257,6 +265,8 @@ async function apps() {
     check(has("pypi", "django", "4.2") && shown.software.some(s => s.kind === "pypi" && s.name === "asgiref"), "Python: Django and what it brought with it, from the virtual environment");
     check(has("npm", "express", "4.17.1") && has("npm", "@hono/node-server", "1.11.0"), "Node.js: packages from node_modules, scoped ones too");
     check(has("composer", "laravel/framework", "10.0.0") && !shown.software.some(s => s.name === "phpunit/phpunit"), "PHP: Composer's installed packages, without those for development");
+    check(shown.software.some(s => s.kind === "composer" && s.name === "guzzlehttp/guzzle" && s.version === "6.5.5" && s.where === "public/files/ckfinder"), "PHP: a bundled tool's own packages, with their folder");
+    check(shown.software.some(s => s.kind === "composer" && s.name === "laravel/framework" && !s.where), "PHP: the app's own packages, with no folder");
     check(has("gem", "actionpack", "6.0.0") && has("cargo", "tokio", "1.0.0"), "Ruby and Rust lock files");
     check(has("go", "golang.org/x/text", "v0.3.7") && shown.software.some(s => s.kind === "go" && s.name === "stdlib" && /^1\.22\./.test(s.version)), "Go: the modules and Go version inside the program, without running it");
     check(!/never-sent/.test(JSON.stringify(shown)), "nothing from .env");

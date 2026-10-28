@@ -1,5 +1,5 @@
 #!/bin/sh
-# Mendbird helper for Linux servers. Version 1.1.0.
+# Mendbird helper for Linux servers. Version 1.2.0.
 #
 # Lists the software this server runs: the operating system and its installed packages, the web server, PHP, Node.js
 # and the database, with their exact versions. Once a day it sends that list to Mendbird, which checks every version
@@ -9,7 +9,8 @@
 #
 # 1. It reads package names and versions with the system's own tools (dpkg-query, rpm or apk), and asks the web
 #    server, PHP, Node.js and the database for their version numbers. If you list your apps below, it also reads the
-#    names and versions of the packages each one is built from. Nothing else is read, and nothing in your apps is run.
+#    names and versions of the packages each one is built from, including any second set a bundled tool carries in a
+#    folder of its own. Nothing else is read, and nothing in your apps is run.
 # 2. It signs the list with the secret key below and posts it to https://mendbird.com/api/helper. Mendbird refuses
 #    anything unsigned, older than five minutes, or sent twice.
 # 3. It opens no port, takes no instructions, and needs no root: any user can run it.
@@ -35,7 +36,7 @@ umask 077
 # Written in by Mendbird when you downloaded this copy. "Make a new key" in your Mendbird account retires it.
 KEY='__MENDBIRD_KEY__'
 SITE='__MENDBIRD_SITE__'
-VERSION='1.1.0'
+VERSION='1.2.0'
 
 # Your own apps, if this server runs any: Python, Node.js, PHP, Ruby, Rust or Go. Put each app's folder here, separated
 # by spaces, or the path of a Go program. For example: APPS='/srv/shop /srv/api/bin/server'
@@ -48,12 +49,25 @@ URL="${MENDBIRD_URL:-https://mendbird.com}/api/helper"
 clean() { tr -cd 'A-Za-z0-9.+:~_@/ -'; }
 clean_lines() { tr -cd 'A-Za-z0-9.+:~_@/ \n-'; }
 
-# One JSON entry per line of "name version" read from standard input.
+# One JSON entry per line of "name version" read from standard input. A second argument is the folder a second set of
+# packages was found in, inside an app.
 entries() {
-	kind=$1
+	kind=$1 where=$(printf '%s' "${2:-}" | clean)
 	clean_lines | while read -r name version; do
 		[ -n "$name" ] || continue
-		printf ',{"kind":"%s","name":"%s","version":"%s"}' "$kind" "$name" "$version"
+		printf ',{"kind":"%s","name":"%s","version":"%s"' "$kind" "$name" "$version"
+		[ -n "$where" ] && printf ',"where":"%s"' "$where"
+		printf '}'
+	done
+}
+
+# Every folder called $2 inside app $1, its own first, then any a bundled tool carries deeper down (a file browser with
+# its own Composer packages, say), as "folder<tab>where" lines. Folders that hold no code are skipped, and so is
+# everything inside an installed set; links are not followed.
+inside() {
+	find "$1" -maxdepth 10 -type d \( -name .git -o -name .svn -o -name cache -o -name tmp -o -name logs -o -name uploads -o -name images -o -name storage \) -prune \
+		-o -type d -name "$2" -print -prune 2>/dev/null | while read -r found; do
+		where=${found%/"$2"}; where=${where#"$1"}; printf '%s\t%s\n' "$found" "${where#/}"
 	done
 }
 
@@ -113,20 +127,23 @@ app_python() {
 	return 0
 }
 app_node() {
-	for pkg in "$1"/node_modules/*/package.json "$1"/node_modules/@*/*/package.json; do
-		[ -f "$pkg" ] || continue
-		dir=${pkg%/package.json}
-		# The first "version" in the file, which is the package's own, whether the file is spread out or on one line.
-		printf '%s %s\n' "${dir#"$1"/node_modules/}" "$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$pkg" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
-	done | entries npm
+	inside "$1" node_modules | while IFS='	' read -r modules where; do
+		for pkg in "$modules"/*/package.json "$modules"/@*/*/package.json; do
+			[ -f "$pkg" ] || continue
+			dir=${pkg%/package.json}
+			# The first "version" in the file, which is the package's own, whether the file is spread out or on one line.
+			printf '%s %s\n' "${dir#"$modules"/}" "$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$pkg" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
+		done | entries npm "$where"
+	done
 }
 app_php() {
-	installed="$1/vendor/composer/installed.json"
-	if [ -r "$installed" ] && has php; then
+	has php || return 0
+	inside "$1" vendor | while IFS='	' read -r vendor where; do
+		[ -r "$vendor/composer/installed.json" ] || continue
 		# Composer's own record of what it installed, leaving out packages for development only.
 		php -r '$d = json_decode(file_get_contents($argv[1]), true); $dev = isset($d["dev-package-names"]) ? $d["dev-package-names"] : array();
-			foreach (isset($d["packages"]) ? $d["packages"] : (array) $d as $p) { if (isset($p["name"], $p["version"]) && !in_array($p["name"], $dev, true)) { echo $p["name"], " ", ltrim($p["version"], "v"), "\n"; } }' "$installed" | entries composer
-	fi
+			foreach (isset($d["packages"]) ? $d["packages"] : (array) $d as $p) { if (isset($p["name"], $p["version"]) && !in_array($p["name"], $dev, true)) { echo $p["name"], " ", ltrim($p["version"], "v"), "\n"; } }' "$vendor/composer/installed.json" | entries composer "$where"
+	done
 	return 0
 }
 app_go_program() {

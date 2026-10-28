@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       Mendbird Helper
  * Plugin URI:        https://mendbird.com/helper
- * Description:       Lets Mendbird read the exact version of WordPress, your plugins, your theme, PHP and your database, so it can check each one against the lists of known security flaws every morning. It only reads, sends no content or personal details, and answers only Mendbird. See what it sends under Tools, Mendbird helper.
- * Version:           1.1.1
+ * Description:       Lets Mendbird read the exact version of WordPress, your plugins, your theme, PHP, your database and the server's system packages, so it can check each one against the lists of known security flaws every morning. It only reads, sends no content or personal details, and answers only Mendbird. See what it sends under Tools, Mendbird helper.
+ * Version:           1.2.0
  * Requires at least: 5.5
  * Requires PHP:      7.4
  * Author:            Mendbird
@@ -18,7 +18,8 @@
  * 2. If the signature is right and the time is within five minutes, this plugin replies with the list, signed with
  *    the same key so Mendbird knows it was not changed on the way. Otherwise it does nothing at all, and your site
  *    shows its normal page, so nobody else can tell it is here.
- * 3. The list is names and version numbers, and five settings: whether debug mode shows errors to visitors, whether
+ * 3. The list is names and version numbers (the server's system packages among them, read from the files its package
+ *    manager keeps, with nothing run), and five settings: whether debug mode shows errors to visitors, whether
  *    admins can edit code from the dashboard, whether plugins update themselves, whether PHP announces its version,
  *    and how many admin accounts there are (a number, never names).
  *
@@ -39,7 +40,7 @@ defined( 'ABSPATH' ) || exit;
 // wordpress.org, which is connected from Tools, Mendbird helper instead. "Make a new key" in your account retires it.
 define( 'MENDBIRD_HELPER_KEY', '__MENDBIRD_KEY__' );
 define( 'MENDBIRD_HELPER_HOST', '__MENDBIRD_HOST__' );
-define( 'MENDBIRD_HELPER_VERSION', '1.1.1' );
+define( 'MENDBIRD_HELPER_VERSION', '1.2.0' );
 if ( ! defined( 'MENDBIRD_HELPER_URL' ) ) {
 	define( 'MENDBIRD_HELPER_URL', 'https://mendbird.com' );
 }
@@ -60,6 +61,43 @@ function mendbird_helper_bare( $host ) {
 }
 function mendbird_helper_site() {
 	return (string) wp_parse_url( home_url(), PHP_URL_HOST );
+}
+
+/**
+ * The server's system and its packages, from the files its package manager keeps (dpkg on Debian and Ubuntu, apk on
+ * Alpine). Systems patch the web server, PHP and the database without changing their headline version, so this is
+ * what tells a patched server from an old one. Nothing is run; on a host that keeps these files out of reach, nothing
+ * is sent.
+ */
+function mendbird_helper_system() {
+	$os = @is_readable( '/etc/os-release' ) ? (string) @file_get_contents( '/etc/os-release' ) : '';
+	if ( ! preg_match( '/^ID="?([\w.-]+)/m', $os, $id ) ) {
+		return array();
+	}
+	$found    = array( array( 'kind' => 'os', 'name' => strtolower( $id[1] ), 'version' => preg_match( '/^VERSION_ID="?([\w.]+)/m', $os, $v ) ? $v[1] : '' ) );
+	$packages = array();
+	if ( @is_readable( '/var/lib/dpkg/status' ) ) {
+		foreach ( preg_split( '/\n\n+/', (string) @file_get_contents( '/var/lib/dpkg/status' ) ) as $entry ) {
+			if ( ! preg_match( '/^Status: .* installed$/m', $entry ) || ! preg_match( '/^Package: (\S+)/m', $entry, $name ) || ! preg_match( '/^Version: (\S+)/m', $entry, $version ) ) {
+				continue;
+			}
+			// "Source: glibc (2.41-12)" names the source package, as security notices do, and its version.
+			if ( preg_match( '/^Source: (\S+)(?: \((\S+)\))?/m', $entry, $source ) ) {
+				$name[1]    = $source[1];
+				$version[1] = isset( $source[2] ) ? $source[2] : $version[1];
+			}
+			$packages[ 'deb ' . $name[1] . ' ' . $version[1] ] = array( 'kind' => 'deb', 'name' => $name[1], 'version' => $version[1] );
+		}
+	} elseif ( @is_readable( '/lib/apk/db/installed' ) ) {
+		foreach ( preg_split( '/\n\n+/', (string) @file_get_contents( '/lib/apk/db/installed' ) ) as $entry ) {
+			if ( preg_match( '/^P:(\S+)/m', $entry, $name ) && preg_match( '/^V:(\S+)/m', $entry, $version ) ) {
+				$origin = preg_match( '/^o:(\S+)/m', $entry, $o ) ? $o[1] : $name[1];
+				$packages[ 'apk ' . $origin . ' ' . $version[1] ] = array( 'kind' => 'apk', 'name' => $origin, 'version' => $version[1] );
+			}
+		}
+	}
+	ksort( $packages );
+	return array_merge( $found, array_values( $packages ) );
 }
 
 /** The list: names, versions and five settings. Nothing else is ever read. */
@@ -102,7 +140,7 @@ function mendbird_helper_list() {
 	$users = count_users();
 	return array(
 		'helper'   => array( 'kind' => 'wordpress', 'version' => MENDBIRD_HELPER_VERSION ),
-		'software' => $software,
+		'software' => array_merge( $software, mendbird_helper_system() ),
 		'settings' => array(
 			'debug_on'              => defined( 'WP_DEBUG' ) && WP_DEBUG && ( ! defined( 'WP_DEBUG_DISPLAY' ) || WP_DEBUG_DISPLAY ),
 			'dashboard_code_editor' => ! ( defined( 'DISALLOW_FILE_EDIT' ) && DISALLOW_FILE_EDIT ) && ! ( defined( 'DISALLOW_FILE_MODS' ) && DISALLOW_FILE_MODS ),

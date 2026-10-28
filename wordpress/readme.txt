@@ -4,7 +4,7 @@ Tags: security, vulnerabilities, updates, plugins, monitoring
 Requires at least: 5.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.1
+Stable tag: 1.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,6 +20,7 @@ What it sends, and nothing else:
 
 * the names and versions of WordPress, your plugins and themes, and whether each is switched on
 * the versions of PHP, its add-ons, the database and the web server
+* the server's operating system and its packages, read from the files its package manager keeps (nothing is run), as the system patches the web server, PHP and the database without changing their version numbers
 * five settings: whether debug mode shows errors to visitors, whether admins can edit code from the dashboard, whether plugins update themselves, whether PHP announces its version, and how many admin accounts there are (a number, never names)
 
 Tools, Mendbird helper shows exactly what it sends, drawn from the same list Mendbird receives.
@@ -64,6 +65,9 @@ No. It only reads. Mendbird tells you what to update, and you or your developer 
 2. Connected: Mendbird reads the same list every morning, and you can disconnect at any time.
 
 == Changelog ==
+
+= 1.2.0 =
+* Sends the server's operating system and its packages, where the host lets them be read, so a server the system has patched is not reported by its headline version.
 
 = 1.1.1 =
 * The Tools page loads its styles with wp_enqueue_style, only on that page.
